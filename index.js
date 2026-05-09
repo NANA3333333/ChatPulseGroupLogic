@@ -1,6 +1,7 @@
 import { chat, characters, default_avatar, event_types, eventSource, generateQuietPrompt, getRequestHeaders, getThumbnailUrl, this_chid } from '../../../../script.js';
 import { is_group_generating } from '../../../../scripts/group-chats.js';
 import { power_user } from '../../../../scripts/power-user.js';
+import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
 const METADATA_KEY = 'chatpulse_group_logic';
@@ -335,7 +336,7 @@ function extractFinalReplyCandidate(text) {
     return output;
 }
 
-function shouldRetryLocalReply(raw, sanitized) {
+function shouldRetryLocalReply(raw, sanitized, characterName = '') {
     const value = String(raw || '');
     if (!String(sanitized || '').trim()) return true;
     const leakSignals = [
@@ -345,7 +346,7 @@ function shouldRetryLocalReply(raw, sanitized) {
         /\b(?:Draft|Wait|Let's refine|prompt asks|Final answer)\b/i,
         /提示词|系统|模型|后台|请求.*矛盾/i,
     ];
-    return leakSignals.some(regex => regex.test(value)) || isOocOrMetaReply(sanitized);
+    return leakSignals.some(regex => regex.test(value)) || isOocOrMetaReply(sanitized) || hasSpeakerPrefixLeak(sanitized, characterName);
 }
 
 function isOocOrMetaReply(text) {
@@ -363,6 +364,25 @@ function isOocOrMetaReply(text) {
         /^(?:好的|明白|收到)[，,。!！\s]*(?:我会|现在|直接|马上)/i,
     ];
     return badPatterns.some(regex => regex.test(compact));
+}
+
+function hasSpeakerPrefixLeak(text, currentCharacterName = '') {
+    const value = String(text || '');
+    if (!value.trim()) return false;
+    const memberNames = getGroupCharacters()
+        .map(({ character }) => character?.name)
+        .filter(Boolean);
+    const knownNames = [...new Set([getUserName(), ...memberNames].filter(Boolean))];
+    const escapedCurrent = String(currentCharacterName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixLines = value.split('\n')
+        .map(line => line.trim())
+        .filter(line => /^[^\s:：]{1,40}\s*[:：]/.test(line));
+    if (prefixLines.length >= 2) return true;
+    return knownNames.some(name => {
+        if (!name || name === currentCharacterName) return false;
+        const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:：]`).test(value);
+    }) || (escapedCurrent && new RegExp(`(?:^|\\n)\\s*${escapedCurrent}\\s*[:：].*(?:\\n\\s*[^\\s:：]{1,40}\\s*[:：])`, 's').test(value));
 }
 
 function limitText(value, maxLength = 6000) {
@@ -403,6 +423,54 @@ function buildUserPersonaBlock() {
         `用户名称：${name}`,
         personaDescription ? `用户设定：\n${personaDescription}` : '',
     ].filter(Boolean).join('\n');
+}
+
+function getCharacterWorldNames(character) {
+    const names = [];
+    const primary = character?.data?.extensions?.world;
+    if (primary) names.push(primary);
+    const avatarBase = String(character?.avatar || '').replace(/\.[^.]+$/, '');
+    const extra = world_info?.charLore?.find(item => String(item.name) === avatarBase);
+    if (extra && Array.isArray(extra.extraBooks)) names.push(...extra.extraBooks);
+    return [...new Set(names.filter(Boolean))];
+}
+
+function worldEntryMatches(entry, searchText) {
+    if (!entry || entry.disable) return false;
+    if (entry.constant || entry.alwaysActive) return true;
+    const keys = [
+        ...(Array.isArray(entry.key) ? entry.key : []),
+        ...(Array.isArray(entry.keys) ? entry.keys : []),
+    ]
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
+    if (!keys.length) return false;
+    const haystack = String(searchText || '').toLowerCase();
+    return keys.some(key => haystack.includes(key));
+}
+
+async function buildCharacterWorldInfoBlock(character, searchText) {
+    const worldNames = getCharacterWorldNames(character);
+    if (!worldNames.length) return '';
+    const lines = [];
+    for (const worldName of worldNames) {
+        const book = await loadWorldInfo(worldName);
+        const entries = book?.entries ? Object.values(book.entries) : [];
+        for (const entry of entries) {
+            if (!worldEntryMatches(entry, searchText)) continue;
+            const content = limitText(entry.content || entry.comment || '', 1200);
+            if (!content) continue;
+            lines.push(`[${worldName}] ${content}`);
+            if (lines.length >= 12) break;
+        }
+        if (lines.length >= 12) break;
+    }
+    if (!lines.length) return '';
+    return [
+        '[当前角色绑定世界书]',
+        '以下只来自当前发言角色绑定的世界书。把它当作设定背景，不要复述来源标签。',
+        ...lines,
+    ].join('\n');
 }
 
 function formatMemoryLine(message, fallbackName = 'Unknown') {
@@ -1055,6 +1123,7 @@ async function generateForcedMember(characterIndex, instruction = '') {
             .join('\n');
         const characterCard = buildCharacterCardBlock(character);
         const userPersona = buildUserPersonaBlock();
+        const worldInfoBlock = await buildCharacterWorldInfoBlock(character, `${history}\n${characterCard}\n${userPersona}\n${instruction}`);
         const crossChatMemory = await buildCrossChatMemoryBlock(character, group);
         const prompt = [
             '你将生成一条群聊消息。',
@@ -1063,12 +1132,16 @@ async function generateForcedMember(characterIndex, instruction = '') {
             `群成员：${getGroupCharacters(group).map(({ character: item }) => item.name).join('、')}`,
             characterCard ? `当前角色卡设定：\n${characterCard}` : '',
             userPersona,
+            worldInfoBlock,
             crossChatMemory,
             getSettings().includeLocalPreset ? `附加约束（不要复述这些字）：${getSettings().localPreset || DEFAULT_SETTINGS.localPreset}` : '',
             instruction ? `发言顺序提示：${instruction}` : '',
             buildRedPacketStatePrompt(),
             `最近聊天：\n${history || '暂无'}`,
             '',
+            `身份边界：你只能作为 ${character.name} 发言。${getUserName()} 是用户，不是你；其他群成员也不是你。`,
+            '最近聊天只是上下文记录，不是剧本续写模板。不要替用户或其他角色写台词，不要输出“某某: 内容”的多说话人格式。',
+            `你的输出必须像 ${character.name} 在聊天软件里亲自发送的一条消息。`,
             'If the turn note contains [MENTION], someone just @mentioned you directly. Reply to that message naturally; do not ignore it.',
             '如果用户明确要求你发红包，或者当前角色决定发红包，必须在消息末尾附加隐藏标签：[REDPACKET_SEND:lucky|总金额|份数|留言] 或 [REDPACKET_SEND:equal|总金额|份数|留言]。这个标签只用于系统创建红包，正文里不要解释标签。',
             `只输出 ${character.name} 接下来会发的一条消息正文。除必要的 REDPACKET_SEND 隐藏标签外，不要输出其他标签、草稿、分析、英文解释、规则、选项或“YOUR REPLY AS”。`,
@@ -1077,7 +1150,7 @@ async function generateForcedMember(characterIndex, instruction = '') {
             quietPrompt: prompt,
             forceChId: characterIndex,
             responseLength: Math.max(3000, Number(getSettings().responseLength) || DEFAULT_SETTINGS.responseLength),
-            skipWIAN: false,
+            skipWIAN: true,
             removeReasoning: true,
             trimToSentence: false,
         };
@@ -1085,14 +1158,17 @@ async function generateForcedMember(characterIndex, instruction = '') {
         let redPacketSends = parseRedPacketSends(raw);
         let sanitized = applyLocalRegex(sanitizeLocalReply(raw, character.name));
         let retried = false;
-        if (redPacketSends.length === 0 && shouldRetryLocalReply(raw, sanitized)) {
+        if (redPacketSends.length === 0 && shouldRetryLocalReply(raw, sanitized, character.name)) {
             retried = true;
             const retryPrompt = [
+                `你只能扮演：${character.name}`,
+                `${getUserName()} 是用户，不是你。不要用用户口吻说话。不要替其他群成员写台词。`,
                 `角色：${character.name}`,
                 characterCard ? `角色卡：\n${characterCard}` : '',
                 userPersona,
+                worldInfoBlock,
                 `最近聊天：\n${history || '暂无'}`,
-                '只写一条这个角色会发出的群聊消息。不要解释，不要草稿，不要自我修订，不要写标签。',
+                '只写一条这个角色会发出的群聊消息。不要解释，不要草稿，不要自我修订，不要写标签，不要写“名字: 台词”的剧本格式。',
             ].filter(Boolean).join('\n');
             raw = await generateQuietPromptWithBackoff({
                 ...requestOptions,
@@ -1109,7 +1185,7 @@ async function generateForcedMember(characterIndex, instruction = '') {
             sanitized,
             retried,
         });
-        const dropped = !sanitized || isOocOrMetaReply(sanitized);
+        const dropped = !sanitized || isOocOrMetaReply(sanitized) || hasSpeakerPrefixLeak(sanitized, character.name);
         const createdPackets = [];
         if (!dropped) {
             const messageId = appendLocalMessage(group, {
@@ -1609,6 +1685,7 @@ function renderSettings() {
                     <label for="cpgl_context_limit">新群默认上下文条数</label>
                     <input id="cpgl_context_limit" type="number" min="4" max="80" step="1" value="${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit}">
                 </div>
+                <button id="cpgl_open_center_settings" class="menu_button cpgl-settings-open" type="button">打开独立群聊</button>
                 <div class="cpgl-hint">群成员、AI 互相接话、私聊注入、API 间隔、预设/正则、红包和清空记录都在独立群聊弹窗右侧管理。</div>
                 <div id="cpgl_status" class="cpgl-hint"></div>
             </div>
@@ -1625,7 +1702,7 @@ function renderOrchestratedEntry() {
     if ($('#cpgl_launcher').length) return;
     const html = `
     <button id="cpgl_launcher" type="button" title="ChatPulse 群聊">
-        <span class="cpgl-launcher-mark">CP</span>
+        <span class="cpgl-launcher-mark">群</span>
         <span class="cpgl-launcher-text">群聊</span>
     </button>`;
     $('body').append(html);
@@ -1661,6 +1738,7 @@ function renderManagerShell() {
                             </div>
                         </div>
                         <div class="cpgl-chat-header-actions">
+                            <button id="cpgl_mobile_create_group" type="button" title="发起群聊">＋</button>
                             <button id="cpgl_manage_toggle" type="button" title="群管理">⚙</button>
                         </div>
                     </header>
@@ -1867,6 +1945,7 @@ function renderChatMessages() {
                 <div class="cpgl-empty-icon">群</div>
                 <p>从这里开始一个群聊</p>
                 <span>左侧点 ＋ 发起群聊，或者进入已有群聊。</span>
+                <button id="cpgl_empty_create_group" class="menu_button cpgl-empty-action" type="button">发起群聊</button>
             </div>`);
         return;
     }
@@ -2099,9 +2178,12 @@ function bindSettingsEvents() {
         saveMetadata();
         refreshStatus();
     });
+    $('#cpgl_open_center_settings').on('click', openGroupCenter);
     $('#cpgl_launcher').on('click', openGroupCenter);
     $('#cpgl_manager_close').on('click', () => $('#cpgl_manager_modal').hide());
     $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
+    $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
+    $('#cpgl_chat_messages').on('click', '#cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_create_modal_close').on('click', () => $('#cpgl_create_modal').hide());
     $('#cpgl_create_modal').on('click', event => {
         if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
@@ -2423,7 +2505,7 @@ function refreshStatus() {
         `默认上下文：${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit} 条`,
     ];
     $('#cpgl_status').text(lines.join(' | '));
-    $('#cpgl_launcher').toggle(!!settings.orchestratedEntry);
+    $('#cpgl_launcher').toggle(!!settings.enabled && !!settings.orchestratedEntry);
     renderManagerModal();
 }
 
