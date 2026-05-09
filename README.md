@@ -95,4 +95,10 @@ node --check index.js
 
 ## 许可证
 
-MIT
+Creative Commons Attribution 4.0 International，简称 CC BY 4.0。
+
+完整协议见 `LICENSE`，或访问：
+
+```text
+https://creativecommons.org/licenses/by/4.0/
+```
