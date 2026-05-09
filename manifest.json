@@ -1,0 +1,12 @@
+{
+    "display_name": "ChatPulse Group Logic",
+    "loading_order": 95,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Nana + Codex",
+    "version": "0.1.0",
+    "homePage": "https://github.com/NANA3333333/ChatPulseGroupLogic",
+    "generate_interceptor": "chatPulseGroupLogicInterceptor"
+}
