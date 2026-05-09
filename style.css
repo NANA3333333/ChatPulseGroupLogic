@@ -1332,6 +1332,25 @@
 }
 
 @media (max-width: 620px) {
+    .cpgl-modal-backdrop {
+        align-items: stretch;
+        justify-content: stretch;
+        overflow: hidden;
+        background: var(--cpgl-bg-main);
+        backdrop-filter: none;
+    }
+
+    .cpgl-app-shell {
+        width: 100vw;
+        width: 100dvw;
+        height: 100vh;
+        height: 100dvh;
+        max-width: none;
+        max-height: none;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
     #cpgl_launcher {
         right: calc(env(safe-area-inset-right, 0px) + 10px);
         bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
@@ -1341,11 +1360,116 @@
         display: grid;
     }
 
+    .cpgl-sidebar-nav {
+        width: 42px;
+        flex: 0 0 42px;
+        padding: 8px 4px calc(env(safe-area-inset-bottom, 0px) + 8px);
+    }
+
+    .cpgl-nav-item {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        font-size: 13px;
+    }
+
+    #cpgl_manager_close {
+        font-size: 20px;
+    }
+
     .cpgl-middle-column {
         display: none;
     }
 
+    .cpgl-right-column,
+    .cpgl-chat-window {
+        min-width: 0;
+        min-height: 0;
+    }
+
+    .cpgl-chat-header {
+        min-height: 54px;
+        padding: calc(env(safe-area-inset-top, 0px) + 6px) 8px 6px 10px;
+        gap: 6px;
+    }
+
+    .cpgl-header-icon {
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+        font-size: 13px;
+    }
+
     .cpgl-chat-header-name {
-        max-width: 58vw;
+        max-width: 46vw;
+        font-size: 15px;
+    }
+
+    .cpgl-chat-header .cpgl-hint {
+        display: none;
+    }
+
+    .cpgl-chat-header-actions {
+        gap: 4px;
+    }
+
+    .cpgl-chat-header-actions button {
+        width: 30px;
+        height: 30px;
+    }
+
+    .cpgl-chat-messages {
+        padding: 10px 8px;
+    }
+
+    .cpgl-message-content {
+        max-width: 82%;
+    }
+
+    .cpgl-message-avatar,
+    .cpgl-message-avatar img {
+        width: 34px;
+        height: 34px;
+    }
+
+    .cpgl-chat-composer {
+        height: 122px;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    .cpgl-input-toolbar {
+        height: 32px;
+        padding: 0 10px;
+    }
+
+    #cpgl_entry_text {
+        padding: 0 10px;
+        font-size: 14px;
+    }
+
+    .cpgl-entry-actions {
+        padding: 6px 10px 8px;
+    }
+
+    .cpgl-send-button {
+        min-height: 34px;
+        padding: 6px 18px;
+    }
+
+    .cpgl-manage-drawer {
+        width: calc(100vw - 42px);
+        width: calc(100dvw - 42px);
+        min-width: 0;
+    }
+
+    .cpgl-emoji-picker {
+        left: 8px;
+        width: min(320px, calc(100dvw - 64px));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .cpgl-mention-menu {
+        left: 8px;
+        width: min(260px, calc(100dvw - 64px));
     }
 }

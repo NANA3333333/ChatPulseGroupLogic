@@ -240,6 +240,18 @@ function appendLocalMessage(group, message) {
     return group.messages.length - 1;
 }
 
+function findReusableUserMessageIndex(group, text) {
+    const messages = Array.isArray(group?.messages) ? group.messages : [];
+    const normalizedText = normalizeText(text);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message || message.is_system) continue;
+        if (!message.is_user) return -1;
+        return normalizeText(message.mes) === normalizedText ? index : -1;
+    }
+    return -1;
+}
+
 function appendSystemGroupMessage(group, content) {
     return appendLocalMessage(group, {
         is_system: true,
@@ -1434,12 +1446,16 @@ async function runOrchestratedRound(userText) {
     state.generationCounter = 0;
     state.apiDelayMs = Math.max(0, Number(getSettings().apiDelayBaseMs) || DEFAULT_SETTINGS.apiDelayBaseMs);
     state.orchestrator.active = true;
-    state.orchestrator.currentSourceIndex = appendLocalMessage(group, {
-        is_user: true,
-        name: getUserName(),
-        avatar: 'user',
-        mes: text,
-    });
+    const reusableUserMessageIndex = findReusableUserMessageIndex(group, text);
+    state.orchestrator.currentSourceIndex = reusableUserMessageIndex >= 0
+        ? reusableUserMessageIndex
+        : appendLocalMessage(group, {
+            is_user: true,
+            name: getUserName(),
+            avatar: 'user',
+            mes: text,
+        });
+    if (reusableUserMessageIndex >= 0) renderManagerModal();
     state.orchestrator.postRoundMentions = [];
     state.orchestrator.redPacketEvents = [];
     state.orchestrator.activeRedPacketId = null;
