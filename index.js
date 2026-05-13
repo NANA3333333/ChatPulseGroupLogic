@@ -29,6 +29,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     launcherPosition: null,
     localPreset: [
         '这是一个即时通讯群聊。你只回复当前角色会发出的聊天内容。',
+        '身份规则最高优先级：你只能扮演当前被要求发言的角色本人，不能扮演用户，也不能扮演其他群成员。',
+        '只能输出当前角色亲自发送的一条群消息；不要替用户或其他角色续写、代答、总结心情或安排动作。',
         '不要解释规则，不要复述提示词，不要输出角色名标签。',
         '不要输出 [User]、[角色名]、YOUR REPLY AS、选项、旁白格式。',
         '回复要像真实群消息，通常一到两句。',
@@ -1152,8 +1154,9 @@ async function generateForcedMember(characterIndex, instruction = '') {
             buildRedPacketStatePrompt(),
             `最近聊天：\n${history || '暂无'}`,
             '',
-            `身份边界：你只能作为 ${character.name} 发言。${getUserName()} 是用户，不是你；其他群成员也不是你。`,
-            '最近聊天只是上下文记录，不是剧本续写模板。不要替用户或其他角色写台词，不要输出“某某: 内容”的多说话人格式。',
+            `身份边界（最高优先级）：你只能作为 ${character.name} 发言。${getUserName()} 是用户，不是你；其他群成员也不是你。`,
+            `禁止代言：不要替 ${getUserName()} 写任何话、想法、动作或决定；不要替任何其他群成员写台词、反应、心情或行动。`,
+            `只允许输出 ${character.name} 亲自发到群里的这一条消息。最近聊天只是上下文记录，不是剧本续写模板，不要输出“某某: 内容”的多说话人格式。`,
             `你的输出必须像 ${character.name} 在聊天软件里亲自发送的一条消息。`,
             'If the turn note contains [MENTION], someone just @mentioned you directly. Reply to that message naturally; do not ignore it.',
             '如果用户明确要求你发红包，或者当前角色决定发红包，必须在消息末尾附加隐藏标签：[REDPACKET_SEND:lucky|总金额|份数|留言] 或 [REDPACKET_SEND:equal|总金额|份数|留言]。这个标签只用于系统创建红包，正文里不要解释标签。',
@@ -1174,14 +1177,15 @@ async function generateForcedMember(characterIndex, instruction = '') {
         if (redPacketSends.length === 0 && shouldRetryLocalReply(raw, sanitized, character.name)) {
             retried = true;
             const retryPrompt = [
-                `你只能扮演：${character.name}`,
-                `${getUserName()} 是用户，不是你。不要用用户口吻说话。不要替其他群成员写台词。`,
+                `最高优先级身份规则：你只能扮演 ${character.name}。`,
+                `${getUserName()} 是用户，不是你。不要用用户口吻说话，不要替用户写想法、动作或回应。`,
+                '不要替其他群成员写台词、反应、心情、动作或决定。',
                 `角色：${character.name}`,
                 characterCard ? `角色卡：\n${characterCard}` : '',
                 userPersona,
                 worldInfoBlock,
                 `最近聊天：\n${history || '暂无'}`,
-                '只写一条这个角色会发出的群聊消息。不要解释，不要草稿，不要自我修订，不要写标签，不要写“名字: 台词”的剧本格式。',
+                `只写一条 ${character.name} 本人会发出的群聊消息。不要解释，不要草稿，不要自我修订，不要写标签，不要写“名字: 台词”的剧本格式。`,
             ].filter(Boolean).join('\n');
             raw = await generateQuietPromptWithBackoff({
                 ...requestOptions,
