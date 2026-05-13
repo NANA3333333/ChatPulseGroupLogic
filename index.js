@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiDelayMaxMs: 15000,
     responseLength: 3000,
     includeLocalPreset: false,
+    launcherPosition: null,
     localPreset: [
         '这是一个即时通讯群聊。你只回复当前角色会发出的聊天内容。',
         '不要解释规则，不要复述提示词，不要输出角色名标签。',
@@ -1711,6 +1712,7 @@ function renderSettings() {
     renderOrchestratedEntry();
     renderManagerShell();
     bindSettingsEvents();
+    bindDraggableLauncher();
     refreshStatus();
 }
 
@@ -1722,6 +1724,101 @@ function renderOrchestratedEntry() {
         <span class="cpgl-launcher-text">群聊</span>
     </button>`;
     $('body').append(html);
+    applyLauncherPosition();
+}
+
+function clampNumber(value, min, max) {
+    const number = Number(value);
+    return Math.max(min, Math.min(max, Number.isFinite(number) ? number : min));
+}
+
+function getLauncherDefaultPosition() {
+    return { xRatio: 0.5, yRatio: 0.5 };
+}
+
+function applyLauncherPosition() {
+    const button = document.getElementById('cpgl_launcher');
+    if (!button) return;
+    const saved = getSettings().launcherPosition || getLauncherDefaultPosition();
+    const width = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const height = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const rect = button.getBoundingClientRect();
+    const margin = 8;
+    const x = clampNumber(saved.xRatio, 0, 1) * width;
+    const y = clampNumber(saved.yRatio, 0, 1) * height;
+    button.style.left = `${clampNumber(x - (rect.width || 52) / 2, margin, width - (rect.width || 52) - margin)}px`;
+    button.style.top = `${clampNumber(y - (rect.height || 52) / 2, margin, height - (rect.height || 52) - margin)}px`;
+    button.style.right = 'auto';
+    button.style.bottom = 'auto';
+    button.style.transform = 'none';
+    button.classList.add('is-positioned');
+}
+
+function bindDraggableLauncher() {
+    const button = document.getElementById('cpgl_launcher');
+    if (!button || button.dataset.cpglDragBound === '1') return;
+    button.dataset.cpglDragBound = '1';
+    let drag = null;
+
+    button.addEventListener('pointerdown', event => {
+        if (event.button !== undefined && event.button !== 0) return;
+        const rect = button.getBoundingClientRect();
+        drag = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            moved: false,
+        };
+        button.setPointerCapture?.(event.pointerId);
+        button.classList.add('is-dragging');
+    });
+
+    button.addEventListener('pointermove', event => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const dx = event.clientX - drag.startX;
+        const dy = event.clientY - drag.startY;
+        if (Math.hypot(dx, dy) > 5) drag.moved = true;
+        if (!drag.moved) return;
+        event.preventDefault();
+        const width = window.innerWidth || document.documentElement.clientWidth || 1;
+        const height = window.innerHeight || document.documentElement.clientHeight || 1;
+        const rect = button.getBoundingClientRect();
+        const margin = 8;
+        button.style.left = `${clampNumber(event.clientX - drag.offsetX, margin, width - rect.width - margin)}px`;
+        button.style.top = `${clampNumber(event.clientY - drag.offsetY, margin, height - rect.height - margin)}px`;
+        button.style.right = 'auto';
+        button.style.bottom = 'auto';
+        button.style.transform = 'none';
+    }, { passive: false });
+
+    button.addEventListener('pointerup', event => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const wasMoved = drag.moved;
+        button.releasePointerCapture?.(event.pointerId);
+        button.classList.remove('is-dragging');
+        drag = null;
+        if (wasMoved) {
+            const rect = button.getBoundingClientRect();
+            getSettings().launcherPosition = {
+                xRatio: (rect.left + rect.width / 2) / Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1),
+                yRatio: (rect.top + rect.height / 2) / Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1),
+            };
+            saveSettings();
+            event.preventDefault();
+            event.stopPropagation();
+            button.dataset.cpglSuppressClick = '1';
+            setTimeout(() => delete button.dataset.cpglSuppressClick, 0);
+        }
+    });
+
+    button.addEventListener('pointercancel', event => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        button.releasePointerCapture?.(event.pointerId);
+        button.classList.remove('is-dragging');
+        drag = null;
+    });
 }
 
 function renderManagerShell() {
@@ -2194,8 +2291,14 @@ function bindSettingsEvents() {
         saveMetadata();
         refreshStatus();
     });
-    $('#cpgl_open_center_settings').on('click', openGroupCenter);
-    $('#cpgl_launcher').on('click', openGroupCenter);
+    $('#cpgl_open_center_settings').on('click', event => {
+        event.preventDefault();
+        openGroupCenter();
+    });
+    $('#cpgl_launcher').on('click', event => {
+        if (event.currentTarget.dataset.cpglSuppressClick === '1') return;
+        openGroupCenter();
+    });
     $('#cpgl_manager_close').on('click', () => $('#cpgl_manager_modal').hide());
     $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
@@ -2522,10 +2625,13 @@ function refreshStatus() {
     ];
     $('#cpgl_status').text(lines.join(' | '));
     $('#cpgl_launcher').toggle(!!settings.enabled && !!settings.orchestratedEntry);
+    applyLauncherPosition();
     renderManagerModal();
 }
 
 function registerEvents() {
+    window.addEventListener('resize', applyLauncherPosition);
+    window.addEventListener('orientationchange', () => setTimeout(applyLauncherPosition, 250));
     eventSource.on(event_types.MESSAGE_SENT, onUserMessage);
     eventSource.on(event_types.MESSAGE_RECEIVED, onAssistantMessage);
     eventSource.on(event_types.CHAT_CHANGED, () => {
