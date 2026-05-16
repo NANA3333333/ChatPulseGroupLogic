@@ -34,6 +34,20 @@
     flex-wrap: wrap;
 }
 
+.cpgl-top-launcher .drawer-toggle {
+    display: grid;
+    place-items: center;
+}
+
+.cpgl-top-launcher .drawer-icon {
+    color: #7b9fe0;
+}
+
+.cpgl-top-launcher:hover .drawer-icon,
+.cpgl-top-launcher .drawer-icon:hover {
+    color: #e07b9f;
+}
+
 #cpgl_launcher {
     position: fixed;
     left: 50vw;

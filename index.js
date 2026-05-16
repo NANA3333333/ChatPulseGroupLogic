@@ -1740,13 +1740,24 @@ function renderSettings() {
 }
 
 function renderOrchestratedEntry() {
-    if ($('#cpgl_launcher').length) return;
-    const html = `
-    <button id="cpgl_launcher" type="button" title="ChatPulse 群聊">
-        <span class="cpgl-launcher-mark">群</span>
-        <span class="cpgl-launcher-text">群聊</span>
-    </button>`;
-    $('body').append(html);
+    const topHolder = $('#top-settings-holder');
+    if (topHolder.length && !$('#cpgl_top_launcher').length) {
+        const topHtml = `
+        <div id="cpgl_top_launcher" class="drawer cpgl-top-launcher" title="ChatPulse 群聊">
+            <div class="drawer-toggle drawer-header">
+                <div class="drawer-icon fa-solid fa-comments fa-fw" title="ChatPulse 群聊"></div>
+            </div>
+        </div>`;
+        topHolder.prepend(topHtml);
+    }
+    if (!$('#cpgl_launcher').length) {
+        const html = `
+        <button id="cpgl_launcher" type="button" title="ChatPulse 群聊">
+            <span class="cpgl-launcher-mark">群</span>
+            <span class="cpgl-launcher-text">群聊</span>
+        </button>`;
+        $('body').append(html);
+    }
     applyLauncherPosition();
 }
 
@@ -2389,6 +2400,10 @@ function bindSettingsEvents() {
         if (event.currentTarget.dataset.cpglSuppressClick === '1') return;
         openGroupCenter();
     });
+    $(document).off('click.cpglTopLauncher').on('click.cpglTopLauncher', '#cpgl_top_launcher', event => {
+        event.preventDefault();
+        openGroupCenter();
+    });
     $('#cpgl_manager_close').on('click', () => $('#cpgl_manager_modal').hide());
     $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
@@ -2742,8 +2757,11 @@ function refreshStatus() {
         `默认上下文：${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit} 条`,
     ];
     $('#cpgl_status').text(lines.join(' | '));
-    $('#cpgl_launcher').toggle(!!settings.enabled && !!settings.orchestratedEntry);
-    applyLauncherPosition();
+    const visible = !!settings.enabled && !!settings.orchestratedEntry;
+    const hasTopEntry = $('#cpgl_top_launcher').length > 0;
+    $('#cpgl_top_launcher').toggle(visible);
+    $('#cpgl_launcher').toggle(visible && !hasTopEntry);
+    if (!hasTopEntry) applyLauncherPosition();
     renderManagerModal();
 }
 
@@ -2759,6 +2777,7 @@ function registerEvents() {
     });
     eventSource.on(event_types.APP_READY, () => {
         renderSettings();
+        renderOrchestratedEntry();
         refreshStatus();
     });
 }
