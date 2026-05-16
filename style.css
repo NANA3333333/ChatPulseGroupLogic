@@ -1039,6 +1039,65 @@
     line-height: 1.45;
 }
 
+.cpgl-delete-toolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.cpgl-delete-message-list {
+    max-height: 260px;
+    overflow-y: auto;
+    display: grid;
+    gap: 6px;
+    padding-right: 2px;
+}
+
+.cpgl-delete-message-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.cpgl-delete-message-row:hover {
+    border-color: var(--cpgl-border);
+    background: #fbfdff;
+}
+
+.cpgl-delete-message-row input {
+    margin-top: 3px;
+    flex: 0 0 auto;
+}
+
+.cpgl-delete-message-row div {
+    min-width: 0;
+}
+
+.cpgl-delete-message-row strong {
+    display: block;
+    color: var(--cpgl-text-primary);
+    font-size: 12px;
+}
+
+.cpgl-delete-message-row strong span {
+    color: var(--cpgl-text-muted);
+    font-weight: 500;
+}
+
+.cpgl-delete-message-row p {
+    margin: 4px 0 0;
+    color: var(--cpgl-text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
 .cpgl-danger-section {
     margin-top: 0;
 }
