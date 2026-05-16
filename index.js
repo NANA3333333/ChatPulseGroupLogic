@@ -1886,6 +1886,7 @@ function renderManagerShell() {
                         </div>
                         <div class="cpgl-chat-header-actions">
                             <button id="cpgl_mobile_create_group" type="button" title="发起群聊">＋</button>
+                            <button id="cpgl_header_delete_messages" type="button" title="选择删除对话">🗑</button>
                             <button id="cpgl_manage_toggle" type="button" title="群管理">⚙</button>
                         </div>
                     </header>
@@ -1915,6 +1916,15 @@ function renderManagerShell() {
                             <input id="cpgl_group_name_input" type="text" placeholder="群聊名称">
                             <button id="cpgl_rename_group" class="cpgl-icon-btn" type="button" title="修改群名">✎</button>
                         </div>
+                    </section>
+                    <section id="cpgl_message_delete_section" class="cpgl-section">
+                        <h4>选择删除对话</h4>
+                        <div class="cpgl-delete-toolbar">
+                            <button id="cpgl_select_all_messages" type="button" class="menu_button">全选</button>
+                            <button id="cpgl_select_no_messages" type="button" class="menu_button">取消</button>
+                        </div>
+                        <div id="cpgl_message_delete_list" class="cpgl-delete-message-list"></div>
+                        <button id="cpgl_delete_selected_messages" type="button" class="cpgl-danger-outline" disabled>删除选中</button>
                     </section>
                     <section class="cpgl-section">
                         <h4>群成员 <span id="cpgl_member_count">(0)</span></h4>
@@ -2002,15 +2012,6 @@ function renderManagerShell() {
                     <section class="cpgl-section">
                         <h4>红包记录</h4>
                         <div id="cpgl_red_packet_list" class="cpgl-list"></div>
-                    </section>
-                    <section class="cpgl-section">
-                        <h4>选择删除对话</h4>
-                        <div class="cpgl-delete-toolbar">
-                            <button id="cpgl_select_all_messages" type="button" class="menu_button">全选</button>
-                            <button id="cpgl_select_no_messages" type="button" class="menu_button">取消</button>
-                        </div>
-                        <div id="cpgl_message_delete_list" class="cpgl-delete-message-list"></div>
-                        <button id="cpgl_delete_selected_messages" type="button" class="cpgl-danger-outline" disabled>删除选中</button>
                     </section>
                     <section class="cpgl-section cpgl-danger-section">
                         <h4>危险操作</h4>
@@ -2408,6 +2409,14 @@ function bindSettingsEvents() {
     $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_chat_messages').on('click', '#cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'));
+    $('#cpgl_header_delete_messages').on('click', () => {
+        if (!getCurrentGroup()) {
+            toastr.warning('请先进入一个群聊。');
+            return;
+        }
+        $('#cpgl_manage_drawer').addClass('is-open');
+        document.getElementById('cpgl_message_delete_section')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
     $('#cpgl_create_modal_close').on('click', () => $('#cpgl_create_modal').hide());
     $('#cpgl_create_modal').on('click', event => {
         if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
