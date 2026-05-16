@@ -371,6 +371,11 @@
     background: rgba(123, 159, 224, 0.1);
 }
 
+.cpgl-chat-header-actions button.active {
+    background: rgba(123, 159, 224, 0.18);
+    color: var(--cpgl-accent);
+}
+
 #cpgl_mobile_create_group {
     display: none;
 }
@@ -430,6 +435,17 @@
     max-width: 100%;
 }
 
+.cpgl-message-wrapper.delete-mode {
+    cursor: pointer;
+}
+
+.cpgl-message-wrapper.delete-mode.selected .cpgl-message-bubble,
+.cpgl-message-wrapper.delete-mode.selected .cpgl-redpacket-message-card,
+.cpgl-system-delete-row.delete-mode.selected .cpgl-system-message {
+    outline: 2px solid rgba(123, 159, 224, 0.78);
+    background-color: rgba(123, 159, 224, 0.12);
+}
+
 .cpgl-message-wrapper.user {
     justify-content: flex-end;
 }
@@ -451,6 +467,36 @@
     order: 1;
 }
 
+.cpgl-message-select {
+    display: grid;
+    place-items: center;
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    margin-top: 18px;
+    border: 2px solid #cfd8ea;
+    border-radius: 50%;
+    background: #fff;
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.cpgl-message-select.selected {
+    border-color: var(--cpgl-accent);
+    background: var(--cpgl-accent);
+}
+
+.cpgl-message-wrapper.character .cpgl-message-select {
+    margin-right: 8px;
+}
+
+.cpgl-message-wrapper.user .cpgl-message-select {
+    order: 0;
+    margin-right: 8px;
+}
+
 .cpgl-message-name {
     margin-bottom: 2px;
     color: var(--cpgl-accent);
@@ -470,6 +516,18 @@
     font-size: 12px;
     line-height: 1.4;
     text-align: center;
+}
+
+.cpgl-system-delete-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 6px 0;
+}
+
+.cpgl-system-delete-row .cpgl-message-select {
+    margin-top: 0;
 }
 
 .cpgl-message-bubble {
@@ -674,6 +732,48 @@
     cursor: pointer;
     font-size: 12px;
     font-weight: 700;
+}
+
+.cpgl-delete-mode-bar {
+    min-height: 48px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 14px;
+    border-top: 1px solid var(--cpgl-border);
+    background: rgba(255, 255, 255, 0.96);
+    color: var(--cpgl-text-muted);
+    box-shadow: 0 -8px 24px rgba(123, 159, 224, 0.08);
+    font-size: 13px;
+}
+
+.cpgl-delete-mode-bar > div {
+    display: flex;
+    gap: 8px;
+}
+
+.cpgl-delete-mode-bar button {
+    min-height: 32px;
+    border: 1px solid var(--cpgl-border);
+    border-radius: 8px;
+    padding: 5px 12px;
+    background: #fff;
+    color: var(--cpgl-text-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 700;
+}
+
+.cpgl-delete-mode-bar button.danger {
+    border-color: transparent;
+    background: var(--cpgl-danger);
+    color: #fff;
+}
+
+.cpgl-delete-mode-bar button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 @keyframes cpglPulse {
@@ -1502,10 +1602,35 @@
         max-width: 82%;
     }
 
+    .cpgl-message-select {
+        flex-basis: 20px;
+        width: 20px;
+        height: 20px;
+        margin-top: 14px;
+        font-size: 12px;
+    }
+
     .cpgl-message-avatar,
     .cpgl-message-avatar img {
         width: 34px;
         height: 34px;
+    }
+
+    .cpgl-delete-mode-bar {
+        min-height: 42px;
+        padding: 6px 8px;
+        gap: 6px;
+        font-size: 12px;
+    }
+
+    .cpgl-delete-mode-bar span {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .cpgl-delete-mode-bar button {
+        min-height: 30px;
+        padding: 4px 8px;
     }
 
     .cpgl-chat-composer {

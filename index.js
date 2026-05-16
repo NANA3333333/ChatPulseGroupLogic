@@ -78,6 +78,8 @@ const state = {
         index: 0,
         options: [],
     },
+    deleteMode: false,
+    selectedMessageIds: new Set(),
     apiDelayMs: 2500,
     generationCounter: 0,
 };
@@ -780,6 +782,8 @@ async function openManagedGroup(groupId) {
     const group = getGroupById(groupId);
     if (!group) throw new Error('找不到群聊。');
     state.activeGroupId = group.id;
+    state.deleteMode = false;
+    state.selectedMessageIds.clear();
     hideMentionMenu();
     saveLocalState();
     refreshStatus();
@@ -1892,6 +1896,7 @@ function renderManagerShell() {
                     </header>
                     <div id="cpgl_chat_messages" class="cpgl-chat-messages"></div>
                     <div id="cpgl_typing_indicator" class="cpgl-typing-indicator" style="display:none;"></div>
+                    <div id="cpgl_delete_mode_bar" class="cpgl-delete-mode-bar" style="display:none;"></div>
                     <div class="cpgl-chat-composer">
                         <div id="cpgl_mention_menu" class="cpgl-mention-menu" style="display:none;"></div>
                         <div class="cpgl-input-toolbar">
@@ -2091,6 +2096,16 @@ function escapeHtml(value) {
         .replace(/'/g, '&#039;');
 }
 
+function getLocalMessageId(message, index) {
+    return String(message?.id || index);
+}
+
+function messageSelectControl(messageId) {
+    if (!state.deleteMode) return '';
+    const selected = state.selectedMessageIds.has(messageId);
+    return `<button class="cpgl-message-select ${selected ? 'selected' : ''}" type="button" data-message-id="${escapeHtml(messageId)}" title="${selected ? '取消选择' : '选择删除'}">${selected ? '✓' : ''}</button>`;
+}
+
 function renderChatMessages() {
     if (!$('#cpgl_chat_messages').length) return;
     const group = getCurrentGroup();
@@ -2110,9 +2125,15 @@ function renderChatMessages() {
     $('#cpgl_chat_title').text(group.name || group.id);
     $('#cpgl_chat_subtitle').text(`${(group.members || []).length} 个成员 | 无 @ 随机轮询，@角色 点名优先`);
     const rows = getRecentVisibleMessages(80).map(message => {
+        const messageId = getLocalMessageId(message, message._index);
+        const selected = state.selectedMessageIds.has(messageId);
         if (message.is_system) {
             const systemText = stripTags(message.mes).replace(/^\[System\]\s*/i, '').trim();
-            return systemText ? `<div class="cpgl-system-message">${escapeHtml(systemText)}</div>` : '';
+            return systemText ? `
+                <div class="cpgl-system-delete-row ${state.deleteMode ? 'delete-mode' : ''} ${selected ? 'selected' : ''}" data-message-id="${escapeHtml(messageId)}">
+                    ${messageSelectControl(messageId)}
+                    <div class="cpgl-system-message">${escapeHtml(systemText)}</div>
+                </div>` : '';
         }
         const isUser = !!message.is_user;
         const speaker = isUser ? getUserName() : getMessageSpeaker(message) || 'Unknown';
@@ -2124,7 +2145,8 @@ function renderChatMessages() {
         if (!content && !packet) return '';
         const bubble = packet ? renderRedPacketCard(packet, isUser) : `<div class="cpgl-message-bubble">${escapeHtml(content)}</div>`;
         return `
-            <div class="cpgl-message-wrapper ${isUser ? 'user' : 'character'}">
+            <div class="cpgl-message-wrapper ${isUser ? 'user' : 'character'} ${state.deleteMode ? 'delete-mode' : ''} ${selected ? 'selected' : ''}" data-message-id="${escapeHtml(messageId)}">
+                ${messageSelectControl(messageId)}
                 <div class="cpgl-message-avatar"><img src="${escapeHtml(avatarUrl)}" alt=""></div>
                 <div class="cpgl-message-content">
                     ${isUser ? '' : `<div class="cpgl-message-name">${escapeHtml(speaker)}</div>`}
@@ -2140,7 +2162,7 @@ function renderChatMessages() {
             <span>在下方输入第一条消息。</span>
         </div>`);
     const container = $('#cpgl_chat_messages')[0];
-    if (container) container.scrollTop = container.scrollHeight;
+    if (container && !state.deleteMode) container.scrollTop = container.scrollHeight;
 }
 
 function renderRedPacketCard(packet, isUser = false) {
@@ -2259,6 +2281,7 @@ function renderManagerModal() {
         renderChatMessages();
         renderDebugLogs();
         renderMessageDeleteList();
+        renderDeleteModeBar();
         return;
     }
     $('#cpgl_group_name_input').val(group.name || '');
@@ -2303,6 +2326,7 @@ function renderManagerModal() {
     renderChatMessages();
     renderDebugLogs();
     renderMessageDeleteList();
+    renderDeleteModeBar();
 }
 
 function updatePacketPreview() {
@@ -2379,6 +2403,44 @@ function deleteSelectedMessagesFromGroup(group, selectedIds) {
     return oldMessages.length - keptMessages.length;
 }
 
+function renderDeleteModeBar() {
+    if (!$('#cpgl_delete_mode_bar').length) return;
+    $('#cpgl_header_delete_messages').toggleClass('active', !!state.deleteMode);
+    if (!state.deleteMode || !getCurrentGroup()) {
+        $('#cpgl_delete_mode_bar').hide().empty();
+        return;
+    }
+    const count = state.selectedMessageIds.size;
+    $('#cpgl_delete_mode_bar')
+        .html(`
+            <button id="cpgl_delete_mode_all" type="button">全选</button>
+            <span>已选 ${count} 条，直接点聊天区消息选择</span>
+            <div>
+                <button id="cpgl_delete_mode_cancel" type="button">取消</button>
+                <button id="cpgl_delete_mode_delete" class="danger" type="button" ${count ? '' : 'disabled'}>删除</button>
+            </div>
+        `)
+        .css('display', 'flex');
+}
+
+function setDeleteMode(enabled) {
+    state.deleteMode = !!enabled;
+    if (!state.deleteMode) state.selectedMessageIds.clear();
+    renderChatMessages();
+    renderDeleteModeBar();
+}
+
+function toggleMessageSelection(messageId) {
+    if (!messageId || !state.deleteMode) return;
+    if (state.selectedMessageIds.has(messageId)) {
+        state.selectedMessageIds.delete(messageId);
+    } else {
+        state.selectedMessageIds.add(messageId);
+    }
+    renderChatMessages();
+    renderDeleteModeBar();
+}
+
 function bindSettingsEvents() {
     $('#cpgl_enabled').on('change', event => {
         getSettings().enabled = event.target.checked;
@@ -2414,8 +2476,38 @@ function bindSettingsEvents() {
             toastr.warning('请先进入一个群聊。');
             return;
         }
-        $('#cpgl_manage_drawer').addClass('is-open');
-        document.getElementById('cpgl_message_delete_section')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        setDeleteMode(!state.deleteMode);
+    });
+    $('#cpgl_chat_messages').on('click', '.cpgl-message-select', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleMessageSelection(event.currentTarget.dataset.messageId);
+    });
+    $('#cpgl_chat_messages').on('click', '.cpgl-message-wrapper.delete-mode, .cpgl-system-delete-row.delete-mode', event => {
+        if ($(event.target).closest('button, details, summary').length) return;
+        toggleMessageSelection(event.currentTarget.dataset.messageId);
+    });
+    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_cancel', () => setDeleteMode(false));
+    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_all', () => {
+        const group = getCurrentGroup();
+        if (!group) return;
+        state.selectedMessageIds = new Set((group.messages || []).map((message, index) => getLocalMessageId(message, index)));
+        renderChatMessages();
+        renderDeleteModeBar();
+    });
+    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_delete', () => {
+        const group = getCurrentGroup();
+        if (!group || !state.selectedMessageIds.size) return;
+        const selectedIds = new Set(state.selectedMessageIds);
+        const confirmed = window.confirm(`确定删除选中的 ${selectedIds.size} 条对话记录吗？关联红包也会一起删除。`);
+        if (!confirmed) return;
+        const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
+        clearRuntimeState();
+        saveLocalState();
+        state.deleteMode = false;
+        state.selectedMessageIds.clear();
+        renderManagerModal();
+        toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
     });
     $('#cpgl_create_modal_close').on('click', () => $('#cpgl_create_modal').hide());
     $('#cpgl_create_modal').on('click', event => {
@@ -2614,6 +2706,8 @@ function bindSettingsEvents() {
         if (!confirmed) return;
         const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
         clearRuntimeState();
+        state.deleteMode = false;
+        state.selectedMessageIds.clear();
         saveLocalState();
         renderManagerModal();
         toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
