@@ -2339,6 +2339,7 @@ function clearVisibleViewportModal() {
     const modal = document.getElementById('cpgl_manager_modal');
     if (!modal) return;
     modal.classList.remove('cpgl-visual-viewport');
+    modal.classList.remove('cpgl-touch-modal');
     delete modal.dataset.cpglViewport;
     modal.style.left = '';
     modal.style.top = '';
@@ -2357,18 +2358,24 @@ function syncVisibleViewportModal() {
         return;
     }
     const viewport = window.visualViewport;
+    const layoutWidth = window.innerWidth || document.documentElement.clientWidth || viewport.width || 0;
+    const layoutHeight = window.innerHeight || document.documentElement.clientHeight || viewport.height || 0;
+    const width = Math.max(Number(viewport.width || 0), Number(layoutWidth || 0));
+    const height = Math.max(Number(viewport.height || 0), Number(layoutHeight || 0));
     modal.classList.add('cpgl-visual-viewport');
+    modal.classList.add('cpgl-touch-modal');
     modal.dataset.cpglViewport = [
         `touch=${isTouchViewport() ? '1' : '0'}`,
         `vv=${Math.round(viewport.width || 0)}x${Math.round(viewport.height || 0)}`,
         `offset=${Math.round(viewport.offsetLeft || 0)},${Math.round(viewport.offsetTop || 0)}`,
-        `layout=${Math.round(window.innerWidth || 0)}x${Math.round(window.innerHeight || 0)}`,
+        `layout=${Math.round(layoutWidth)}x${Math.round(layoutHeight)}`,
+        `used=${Math.round(width)}x${Math.round(height)}`,
     ].join(' ');
     modal.style.inset = 'auto';
-    modal.style.left = `${viewport.offsetLeft}px`;
-    modal.style.top = `${viewport.offsetTop}px`;
-    modal.style.width = `${viewport.width}px`;
-    modal.style.height = `${viewport.height}px`;
+    modal.style.left = '0px';
+    modal.style.top = '0px';
+    modal.style.width = `${width}px`;
+    modal.style.height = `${height}px`;
     modal.style.right = 'auto';
     modal.style.bottom = 'auto';
 }
