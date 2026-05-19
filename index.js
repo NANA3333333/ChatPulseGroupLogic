@@ -2269,6 +2269,7 @@ function openGroupCenter() {
     }
     loadLocalState();
     renderManagerModal();
+    syncVisibleViewportModal();
     $('#cpgl_manager_modal').css('display', 'flex');
 }
 
@@ -2318,6 +2319,43 @@ function bindNativeOpenEntrypoints() {
     };
     document.addEventListener('touchend', handler, { capture: true, passive: false });
     document.addEventListener('click', handler, true);
+}
+
+function shouldUseVisibleViewportModal() {
+    const coarsePointer = typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches;
+    return !!window.visualViewport && coarsePointer;
+}
+
+function clearVisibleViewportModal() {
+    const modal = document.getElementById('cpgl_manager_modal');
+    if (!modal) return;
+    modal.classList.remove('cpgl-visual-viewport');
+    modal.style.left = '';
+    modal.style.top = '';
+    modal.style.width = '';
+    modal.style.height = '';
+    modal.style.right = '';
+    modal.style.bottom = '';
+    modal.style.inset = '';
+}
+
+function syncVisibleViewportModal() {
+    const modal = document.getElementById('cpgl_manager_modal');
+    if (!modal) return;
+    if (!shouldUseVisibleViewportModal()) {
+        clearVisibleViewportModal();
+        return;
+    }
+    const viewport = window.visualViewport;
+    modal.classList.add('cpgl-visual-viewport');
+    modal.style.inset = 'auto';
+    modal.style.left = `${viewport.offsetLeft}px`;
+    modal.style.top = `${viewport.offsetTop}px`;
+    modal.style.width = `${viewport.width}px`;
+    modal.style.height = `${viewport.height}px`;
+    modal.style.right = 'auto';
+    modal.style.bottom = 'auto';
 }
 
 function renderManagerModal() {
@@ -2930,12 +2968,15 @@ function refreshStatus() {
     $('#cpgl_top_launcher').toggle(visible);
     $('#cpgl_launcher').toggle(showFloatingEntry);
     if (showFloatingEntry) applyLauncherPosition();
+    syncVisibleViewportModal();
     renderManagerModal();
 }
 
 function registerEvents() {
     window.addEventListener('resize', refreshStatus);
     window.addEventListener('orientationchange', () => setTimeout(refreshStatus, 250));
+    window.visualViewport?.addEventListener('resize', syncVisibleViewportModal);
+    window.visualViewport?.addEventListener('scroll', syncVisibleViewportModal);
     eventSource.on(event_types.MESSAGE_SENT, onUserMessage);
     eventSource.on(event_types.MESSAGE_RECEIVED, onAssistantMessage);
     eventSource.on(event_types.CHAT_CHANGED, () => {
