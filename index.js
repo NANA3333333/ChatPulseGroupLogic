@@ -88,14 +88,26 @@ function getContext() {
     return SillyTavern.getContext();
 }
 
+function cloneDefaultSettings() {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(DEFAULT_SETTINGS);
+    }
+    return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+}
+
+function hasOwnValue(object, key) {
+    if (Object.hasOwn) return Object.hasOwn(object, key);
+    return Object.prototype.hasOwnProperty.call(object, key);
+}
+
 function getSettings() {
     const ctx = getContext();
     if (!ctx.extensionSettings[MODULE_NAME]) {
-        ctx.extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
+        ctx.extensionSettings[MODULE_NAME] = cloneDefaultSettings();
     }
     const settings = ctx.extensionSettings[MODULE_NAME];
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (!Object.hasOwn(settings, key)) settings[key] = DEFAULT_SETTINGS[key];
+        if (!hasOwnValue(settings, key)) settings[key] = DEFAULT_SETTINGS[key];
     }
     return settings;
 }
@@ -1774,6 +1786,15 @@ function getLauncherDefaultPosition() {
     return { xRatio: 0.5, yRatio: 0.5 };
 }
 
+function shouldShowFloatingLauncher() {
+    const hasTopEntry = $('#cpgl_top_launcher').length > 0;
+    if (!hasTopEntry) return true;
+    const width = window.innerWidth || document.documentElement.clientWidth || 0;
+    const coarsePointer = typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches;
+    return width <= 820 || coarsePointer;
+}
+
 function applyLauncherPosition() {
     const button = document.getElementById('cpgl_launcher');
     if (!button) return;
@@ -2240,6 +2261,9 @@ function renderTypingIndicator() {
 }
 
 function openGroupCenter() {
+    if (!$('#cpgl_manager_modal').length) {
+        renderManagerShell();
+    }
     loadLocalState();
     renderManagerModal();
     $('#cpgl_manager_modal').css('display', 'flex');
@@ -2248,6 +2272,27 @@ function openGroupCenter() {
 async function openGroupConversation(groupId) {
     await openManagedGroup(groupId);
     renderManagerModal();
+}
+
+function safeOpenGroupCenter(event) {
+    if (event?.type === 'touchend') {
+        const now = Date.now();
+        const lastTouch = Number(safeOpenGroupCenter.lastTouchAt || 0);
+        safeOpenGroupCenter.lastTouchAt = now;
+        if (now - lastTouch < 350) return;
+    } else if (event?.type === 'click') {
+        const lastTouch = Number(safeOpenGroupCenter.lastTouchAt || 0);
+        if (Date.now() - lastTouch < 350) return;
+    }
+
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    try {
+        openGroupCenter();
+    } catch (error) {
+        console.error('[ChatPulseGroupLogic] Failed to open group center:', error);
+        toastr.error(error?.message || String(error), 'ChatPulse Group Logic');
+    }
 }
 
 function renderManagerModal() {
@@ -2455,18 +2500,12 @@ function bindSettingsEvents() {
         saveMetadata();
         refreshStatus();
     });
-    $('#cpgl_open_center_settings').on('click', event => {
-        event.preventDefault();
-        openGroupCenter();
-    });
-    $('#cpgl_launcher').on('click', event => {
-        if (event.currentTarget.dataset.cpglSuppressClick === '1') return;
-        openGroupCenter();
-    });
-    $(document).off('click.cpglTopLauncher').on('click.cpglTopLauncher', '#cpgl_top_launcher', event => {
-        event.preventDefault();
-        openGroupCenter();
-    });
+    $(document)
+        .off('click.cpglOpen touchend.cpglOpen')
+        .on('click.cpglOpen touchend.cpglOpen', '#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher', event => {
+            if (event.currentTarget?.id === 'cpgl_launcher' && event.currentTarget.dataset.cpglSuppressClick === '1') return;
+            safeOpenGroupCenter(event);
+        });
     $('#cpgl_manager_close').on('click', () => $('#cpgl_manager_modal').hide());
     $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
     $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
@@ -2862,15 +2901,16 @@ function refreshStatus() {
     $('#cpgl_status').text(lines.join(' | '));
     const visible = !!settings.enabled && !!settings.orchestratedEntry;
     const hasTopEntry = $('#cpgl_top_launcher').length > 0;
+    const showFloatingEntry = visible && shouldShowFloatingLauncher();
     $('#cpgl_top_launcher').toggle(visible);
-    $('#cpgl_launcher').toggle(visible && !hasTopEntry);
-    if (!hasTopEntry) applyLauncherPosition();
+    $('#cpgl_launcher').toggle(showFloatingEntry);
+    if (showFloatingEntry) applyLauncherPosition();
     renderManagerModal();
 }
 
 function registerEvents() {
-    window.addEventListener('resize', applyLauncherPosition);
-    window.addEventListener('orientationchange', () => setTimeout(applyLauncherPosition, 250));
+    window.addEventListener('resize', refreshStatus);
+    window.addEventListener('orientationchange', () => setTimeout(refreshStatus, 250));
     eventSource.on(event_types.MESSAGE_SENT, onUserMessage);
     eventSource.on(event_types.MESSAGE_RECEIVED, onAssistantMessage);
     eventSource.on(event_types.CHAT_CHANGED, () => {
