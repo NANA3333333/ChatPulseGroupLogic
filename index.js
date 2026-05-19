@@ -1791,9 +1791,7 @@ function shouldShowFloatingLauncher() {
     const hasTopEntry = $('#cpgl_top_launcher').length > 0;
     if (!hasTopEntry) return true;
     const width = window.innerWidth || document.documentElement.clientWidth || 0;
-    const coarsePointer = typeof window.matchMedia === 'function'
-        && window.matchMedia('(pointer: coarse)').matches;
-    return width <= 820 || coarsePointer;
+    return width <= 820 || isTouchViewport();
 }
 
 function applyLauncherPosition() {
@@ -2322,15 +2320,26 @@ function bindNativeOpenEntrypoints() {
 }
 
 function shouldUseVisibleViewportModal() {
+    return !!window.visualViewport && isTouchViewport();
+}
+
+function isTouchViewport() {
     const coarsePointer = typeof window.matchMedia === 'function'
         && window.matchMedia('(pointer: coarse)').matches;
-    return !!window.visualViewport && coarsePointer;
+    const touchPoints = Number(navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0) > 0;
+    const touchEvent = 'ontouchstart' in window;
+    const viewport = window.visualViewport;
+    const narrowVisibleViewport = viewport
+        ? Math.min(viewport.width || 0, viewport.height || 0) <= 900
+        : false;
+    return coarsePointer || touchPoints || touchEvent || narrowVisibleViewport;
 }
 
 function clearVisibleViewportModal() {
     const modal = document.getElementById('cpgl_manager_modal');
     if (!modal) return;
     modal.classList.remove('cpgl-visual-viewport');
+    delete modal.dataset.cpglViewport;
     modal.style.left = '';
     modal.style.top = '';
     modal.style.width = '';
@@ -2349,6 +2358,12 @@ function syncVisibleViewportModal() {
     }
     const viewport = window.visualViewport;
     modal.classList.add('cpgl-visual-viewport');
+    modal.dataset.cpglViewport = [
+        `touch=${isTouchViewport() ? '1' : '0'}`,
+        `vv=${Math.round(viewport.width || 0)}x${Math.round(viewport.height || 0)}`,
+        `offset=${Math.round(viewport.offsetLeft || 0)},${Math.round(viewport.offsetTop || 0)}`,
+        `layout=${Math.round(window.innerWidth || 0)}x${Math.round(window.innerHeight || 0)}`,
+    ].join(' ');
     modal.style.inset = 'auto';
     modal.style.left = `${viewport.offsetLeft}px`;
     modal.style.top = `${viewport.offsetTop}px`;
