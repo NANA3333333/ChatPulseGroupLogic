@@ -1512,6 +1512,27 @@
     }
 }
 
+@media (pointer: coarse) {
+    .cpgl-modal-backdrop {
+        align-items: stretch;
+        justify-content: stretch;
+        overflow: hidden;
+        background: var(--cpgl-bg-main);
+        backdrop-filter: none;
+    }
+
+    .cpgl-app-shell {
+        width: 100vw;
+        width: 100dvw;
+        height: 100vh;
+        height: 100dvh;
+        max-width: none;
+        max-height: none;
+        border-radius: 0;
+        box-shadow: none;
+    }
+}
+
 @media (max-width: 620px) {
     .cpgl-modal-backdrop {
         align-items: stretch;

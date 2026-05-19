@@ -1751,6 +1751,7 @@ function renderSettings() {
     renderOrchestratedEntry();
     renderManagerShell();
     bindSettingsEvents();
+    bindNativeOpenEntrypoints();
     bindDraggableLauncher();
     refreshStatus();
 }
@@ -1869,6 +1870,8 @@ function bindDraggableLauncher() {
             event.stopPropagation();
             button.dataset.cpglSuppressClick = '1';
             setTimeout(() => delete button.dataset.cpglSuppressClick, 0);
+        } else {
+            safeOpenGroupCenter(event);
         }
     });
 
@@ -2280,9 +2283,17 @@ function safeOpenGroupCenter(event) {
         const lastTouch = Number(safeOpenGroupCenter.lastTouchAt || 0);
         safeOpenGroupCenter.lastTouchAt = now;
         if (now - lastTouch < 350) return;
+    } else if (event?.type === 'pointerup') {
+        const now = Date.now();
+        const lastPointer = Number(safeOpenGroupCenter.lastPointerAt || 0);
+        safeOpenGroupCenter.lastPointerAt = now;
+        if (now - lastPointer < 350) return;
     } else if (event?.type === 'click') {
-        const lastTouch = Number(safeOpenGroupCenter.lastTouchAt || 0);
-        if (Date.now() - lastTouch < 350) return;
+        const lastDirectOpen = Math.max(
+            Number(safeOpenGroupCenter.lastTouchAt || 0),
+            Number(safeOpenGroupCenter.lastPointerAt || 0),
+        );
+        if (Date.now() - lastDirectOpen < 350) return;
     }
 
     event?.preventDefault?.();
@@ -2293,6 +2304,20 @@ function safeOpenGroupCenter(event) {
         console.error('[ChatPulseGroupLogic] Failed to open group center:', error);
         toastr.error(error?.message || String(error), 'ChatPulse Group Logic');
     }
+}
+
+function bindNativeOpenEntrypoints() {
+    if (document.body?.dataset.cpglNativeOpenBound === '1') return;
+    if (document.body) document.body.dataset.cpglNativeOpenBound = '1';
+    const selector = '#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher';
+    const handler = event => {
+        const target = event.target?.closest?.(selector);
+        if (!target) return;
+        if (target.id === 'cpgl_launcher' && target.dataset.cpglSuppressClick === '1') return;
+        safeOpenGroupCenter(event);
+    };
+    document.addEventListener('touchend', handler, { capture: true, passive: false });
+    document.addEventListener('click', handler, true);
 }
 
 function renderManagerModal() {
