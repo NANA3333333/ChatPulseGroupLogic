@@ -4,6 +4,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
+const MODULE_VERSION = '0.1.7';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 
@@ -2979,6 +2980,7 @@ function refreshStatus() {
     const group = getCurrentGroup();
     const settings = getSettings();
     const lines = [
+        `版本：${MODULE_VERSION}`,
         `入口：${settings.enabled && settings.orchestratedEntry ? '显示' : '隐藏'}`,
         group ? `当前独立群：${group.name || group.id}` : '未打开独立群聊',
         `默认上下文：${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit} 条`,
