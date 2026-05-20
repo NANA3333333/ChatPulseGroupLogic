@@ -34,6 +34,12 @@ SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic
 
 然后重启或刷新 SillyTavern，在扩展面板里启用 `ChatPulse Group Logic`。
 
+Termux 手机本地部署推荐直接安装到当前用户扩展目录，因为 SillyTavern 手机端实际会加载 `data/default-user/extensions/third-party` 下的 local 扩展：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NANA3333333/ChatPulseGroupLogic/main/install-termux.sh | bash
+```
+
 ### 手机端点击调试
 
 如果手机端点不开入口，可以把仓库里的调试服务端插件复制到 SillyTavern 的 `plugins` 目录，然后重启 SillyTavern：
