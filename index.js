@@ -4,9 +4,10 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.9';
+const MODULE_VERSION = '0.1.10';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
+const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -83,6 +84,8 @@ const state = {
     selectedMessageIds: new Set(),
     apiDelayMs: 2500,
     generationCounter: 0,
+    debugTapCounter: 0,
+    debugErrorProbeBound: false,
 };
 
 function getContext() {
@@ -1753,6 +1756,7 @@ function renderSettings() {
     renderManagerShell();
     bindSettingsEvents();
     bindNativeOpenEntrypoints();
+    bindDebugClickProbe();
     bindDraggableLauncher();
     refreshStatus();
 }
@@ -2119,6 +2123,135 @@ function escapeHtml(value) {
         .replace(/'/g, '&#039;');
 }
 
+function describeElementForDebug(element) {
+    if (!element) return 'unknown';
+    const id = element.id ? `#${element.id}` : '';
+    const classes = String(element.className || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 4)
+        .map(name => `.${name}`)
+        .join('');
+    const text = normalizeText(element.textContent || element.title || element.getAttribute?.('aria-label') || '').slice(0, 32);
+    return `${element.tagName?.toLowerCase?.() || 'node'}${id}${classes}${text ? ` "${text}"` : ''}`;
+}
+
+function getDebugViewportSnapshot() {
+    const modal = document.getElementById('cpgl_manager_modal');
+    const shell = modal?.querySelector?.('.cpgl-app-shell');
+    const modalRect = modal?.getBoundingClientRect?.();
+    const shellRect = shell?.getBoundingClientRect?.();
+    return {
+        version: MODULE_VERSION,
+        touch: isTouchViewport(),
+        location: String(location.href || ''),
+        visualViewport: window.visualViewport ? {
+            width: Math.round(window.visualViewport.width || 0),
+            height: Math.round(window.visualViewport.height || 0),
+            offsetLeft: Math.round(window.visualViewport.offsetLeft || 0),
+            offsetTop: Math.round(window.visualViewport.offsetTop || 0),
+            scale: Number(window.visualViewport.scale || 1),
+        } : null,
+        layoutViewport: {
+            width: Math.round(window.innerWidth || 0),
+            height: Math.round(window.innerHeight || 0),
+        },
+        modal: modal ? {
+            className: String(modal.className || ''),
+            display: getComputedStyle(modal).display,
+            dataset: modal.dataset.cpglViewport || '',
+            rect: modalRect ? {
+                x: Math.round(modalRect.x),
+                y: Math.round(modalRect.y),
+                width: Math.round(modalRect.width),
+                height: Math.round(modalRect.height),
+            } : null,
+        } : null,
+        shell: shell ? {
+            rect: shellRect ? {
+                x: Math.round(shellRect.x),
+                y: Math.round(shellRect.y),
+                width: Math.round(shellRect.width),
+                height: Math.round(shellRect.height),
+            } : null,
+        } : null,
+        activeGroupId: state.activeGroupId || '',
+    };
+}
+
+function recordCpglDebug(eventName, details = {}) {
+    state.debugTapCounter += 1;
+    const payload = {
+        index: state.debugTapCounter,
+        event: eventName,
+        at: new Date().toISOString(),
+        details,
+        viewport: getDebugViewportSnapshot(),
+    };
+    const message = `#${payload.index} ${eventName} ${details.element || ''}`.trim();
+    console.log('[ChatPulseGroupLogic DEBUG]', payload);
+    $('#cpgl_status').text(`DEBUG ${message}`);
+    try {
+        fetch(DEBUG_ENDPOINT, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(payload),
+        }).catch(error => {
+            console.warn('[ChatPulseGroupLogic DEBUG] Server endpoint unavailable:', error);
+        });
+    } catch (error) {
+        console.warn('[ChatPulseGroupLogic DEBUG] Failed to send debug log:', error);
+    }
+}
+
+function bindDebugClickProbe() {
+    if (document.body?.dataset.cpglDebugProbeBound === '1') return;
+    if (document.body) document.body.dataset.cpglDebugProbeBound = '1';
+    const selector = [
+        '#cpgl_launcher',
+        '#cpgl_top_launcher',
+        '#cpgl_open_center_settings',
+        '#cpgl_manager_modal button',
+        '#cpgl_manager_modal input',
+        '#cpgl_manager_modal select',
+        '#cpgl_manager_modal textarea',
+    ].join(', ');
+    const handler = event => {
+        const target = event.target?.closest?.(selector);
+        if (!target) return;
+        recordCpglDebug(`ui.${event.type}`, {
+            element: describeElementForDebug(target),
+            id: target.id || '',
+            value: target.matches?.('input, textarea, select') ? String(target.value || '').slice(0, 80) : '',
+        });
+    };
+    document.addEventListener('pointerdown', handler, true);
+    document.addEventListener('touchend', handler, { capture: true, passive: true });
+    document.addEventListener('click', handler, true);
+}
+
+function bindDebugErrorProbe() {
+    if (state.debugErrorProbeBound) return;
+    state.debugErrorProbeBound = true;
+    window.addEventListener('error', event => {
+        recordCpglDebug('window.error', {
+            error: event?.message || 'Unknown error',
+            source: event?.filename || '',
+            line: event?.lineno || '',
+            column: event?.colno || '',
+        });
+    });
+    window.addEventListener('unhandledrejection', event => {
+        const reason = event?.reason;
+        recordCpglDebug('window.unhandledrejection', {
+            error: reason?.message || String(reason || 'Unknown promise rejection'),
+            stack: String(reason?.stack || '').slice(0, 500),
+        });
+    });
+}
+
+bindDebugErrorProbe();
+
 function getLocalMessageId(message, index) {
     return String(message?.id || index);
 }
@@ -2263,6 +2396,7 @@ function renderTypingIndicator() {
 }
 
 function openGroupCenter() {
+    recordCpglDebug('openGroupCenter.start');
     if (!$('#cpgl_manager_modal').length) {
         renderManagerShell();
     }
@@ -2270,6 +2404,7 @@ function openGroupCenter() {
     renderManagerModal();
     syncVisibleViewportModal();
     $('#cpgl_manager_modal').css('display', 'flex');
+    recordCpglDebug('openGroupCenter.done');
 }
 
 async function openGroupConversation(groupId) {
@@ -2299,9 +2434,14 @@ function safeOpenGroupCenter(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
     try {
+        recordCpglDebug('safeOpenGroupCenter.invoke', {
+            eventType: event?.type || '',
+            element: describeElementForDebug(event?.target?.closest?.('#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher') || event?.target),
+        });
         openGroupCenter();
     } catch (error) {
         console.error('[ChatPulseGroupLogic] Failed to open group center:', error);
+        recordCpglDebug('safeOpenGroupCenter.error', { error: error?.message || String(error) });
         toastr.error(error?.message || String(error), 'ChatPulse Group Logic');
     }
 }
@@ -2390,6 +2530,10 @@ function syncVisibleViewportModal() {
     modal.style.bottom = 'auto';
     modal.style.setProperty('--cpgl-touch-shell-width', `${desiredShellWidth}px`);
     modal.style.setProperty('--cpgl-touch-shell-height', `${desiredShellHeight}px`);
+    recordCpglDebug('syncVisibleViewportModal', {
+        shellWidth: Math.round(desiredShellWidth),
+        shellHeight: Math.round(desiredShellHeight),
+    });
 }
 
 function renderManagerModal() {

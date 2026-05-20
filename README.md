@@ -34,6 +34,23 @@ SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic
 
 然后重启或刷新 SillyTavern，在扩展面板里启用 `ChatPulse Group Logic`。
 
+### 手机端点击调试
+
+如果手机端点不开入口，可以把仓库里的调试服务端插件复制到 SillyTavern 的 `plugins` 目录，然后重启 SillyTavern：
+
+```bash
+mkdir -p ~/SillyTavern/plugins
+cp -r ~/SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic/server-plugin/chatpulse_group_logic_debug ~/SillyTavern/plugins/chatpulse_group_logic_debug
+```
+
+启动成功后，Termux/TUI 会看到：
+
+```text
+[CPGL DEBUG] Server debug plugin initialized. POST /api/plugins/chatpulse_group_logic_debug/log
+```
+
+之后点击紫色“群”按钮、弹窗里的按钮、输入框等控件，后台会打印 `[CPGL DEBUG ...]` 日志，用来确认点击是否真的进入前端逻辑、弹窗尺寸是否异常、以及是否有 JS 报错。
+
 ## 使用
 
 1. 打开 SillyTavern。
