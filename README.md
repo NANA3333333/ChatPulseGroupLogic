@@ -40,6 +40,8 @@ Termux 手机本地部署推荐直接安装到当前用户扩展目录。SillyTa
 curl -fsSL https://raw.githubusercontent.com/NANA3333333/ChatPulseGroupLogic/main/install-termux.sh | bash
 ```
 
+脚本会同步代码到正确的 local 扩展目录，并从 `settings.json` 的 `disabledExtensions` 里移除本插件，避免“已安装但前端不执行”的状态。
+
 ### 手机端点击调试
 
 如果手机端点不开入口，可以把仓库里的调试服务端插件复制到 SillyTavern 的 `plugins` 目录，然后重启 SillyTavern：

@@ -8,6 +8,7 @@ EXT_DIR="$EXT_ROOT/ChatPulseGroupLogic"
 WRONG_NESTED_EXT_DIR="$EXT_ROOT/third-party/ChatPulseGroupLogic"
 SERVER_PLUGIN_SRC="$EXT_DIR/server-plugin/chatpulse_group_logic_debug"
 SERVER_PLUGIN_DST="$ST_DIR/plugins/chatpulse_group_logic_debug"
+SETTINGS_FILE="$ST_DIR/data/default-user/settings.json"
 
 echo "[ChatPulseGroupLogic] SillyTavern: $ST_DIR"
 mkdir -p "$EXT_ROOT"
@@ -36,6 +37,29 @@ if [ -d "$SERVER_PLUGIN_SRC" ]; then
     mkdir -p "$ST_DIR/plugins"
     rm -rf "$SERVER_PLUGIN_DST"
     cp -R "$SERVER_PLUGIN_SRC" "$SERVER_PLUGIN_DST"
+fi
+
+if [ -f "$SETTINGS_FILE" ]; then
+    echo "[ChatPulseGroupLogic] Enabling extension in settings.json..."
+    node - "$SETTINGS_FILE" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+settings.extension_settings ||= {};
+const disabled = Array.isArray(settings.extension_settings.disabledExtensions)
+    ? settings.extension_settings.disabledExtensions
+    : [];
+const blockedNames = new Set([
+    'ChatPulseGroupLogic',
+    'third-party/ChatPulseGroupLogic',
+    '/ChatPulseGroupLogic',
+]);
+settings.extension_settings.disabledExtensions = disabled.filter(name => !blockedNames.has(String(name)));
+settings.extension_settings.ChatPulseGroupLogic ||= {};
+settings.extension_settings.ChatPulseGroupLogic.enabled = true;
+settings.extension_settings.ChatPulseGroupLogic.orchestratedEntry = true;
+fs.writeFileSync(file, JSON.stringify(settings, null, 4));
+NODE
 fi
 
 echo "[ChatPulseGroupLogic] Installed version:"
