@@ -1,4 +1,4 @@
-const CPGL_BOOT_VERSION = '0.1.12';
+const CPGL_BOOT_VERSION = '0.1.13';
 const CPGL_DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
 let cpglBootTokenPromise = null;
 

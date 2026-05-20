@@ -3,19 +3,31 @@ set -euo pipefail
 
 REPO_URL="https://github.com/NANA3333333/ChatPulseGroupLogic.git"
 ST_DIR="${SILLYTAVERN_DIR:-$HOME/SillyTavern}"
-EXT_DIR="$ST_DIR/data/default-user/extensions/third-party/ChatPulseGroupLogic"
+EXT_ROOT="$ST_DIR/data/default-user/extensions"
+EXT_DIR="$EXT_ROOT/ChatPulseGroupLogic"
+WRONG_NESTED_EXT_DIR="$EXT_ROOT/third-party/ChatPulseGroupLogic"
 SERVER_PLUGIN_SRC="$EXT_DIR/server-plugin/chatpulse_group_logic_debug"
 SERVER_PLUGIN_DST="$ST_DIR/plugins/chatpulse_group_logic_debug"
 
 echo "[ChatPulseGroupLogic] SillyTavern: $ST_DIR"
-mkdir -p "$(dirname "$EXT_DIR")"
+mkdir -p "$EXT_ROOT"
+
+if [ -d "$WRONG_NESTED_EXT_DIR" ]; then
+    echo "[ChatPulseGroupLogic] Removing old wrongly-nested install: $WRONG_NESTED_EXT_DIR"
+    rm -rf "$WRONG_NESTED_EXT_DIR"
+    rmdir "$EXT_ROOT/third-party" 2>/dev/null || true
+fi
 
 if [ -d "$EXT_DIR/.git" ]; then
     echo "[ChatPulseGroupLogic] Updating local user extension..."
     git -C "$EXT_DIR" pull --ff-only
 else
     echo "[ChatPulseGroupLogic] Installing local user extension..."
-    rm -rf "$EXT_DIR"
+    if [ -d "$EXT_DIR" ]; then
+        BACKUP_DIR="$EXT_DIR.backup.$(date +%Y%m%d%H%M%S)"
+        echo "[ChatPulseGroupLogic] Existing non-git folder moved to: $BACKUP_DIR"
+        mv "$EXT_DIR" "$BACKUP_DIR"
+    fi
     git clone "$REPO_URL" "$EXT_DIR"
 fi
 
@@ -28,4 +40,6 @@ fi
 
 echo "[ChatPulseGroupLogic] Installed version:"
 grep '"version"' "$EXT_DIR/manifest.json" || true
+echo "[ChatPulseGroupLogic] Frontend URL should resolve to:"
+echo "  /scripts/extensions/third-party/ChatPulseGroupLogic/manifest.json"
 echo "[ChatPulseGroupLogic] Done. Restart SillyTavern, then refresh the mobile page."
