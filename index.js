@@ -4,7 +4,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.8';
+const MODULE_VERSION = '0.1.9';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 
@@ -2349,6 +2349,8 @@ function clearVisibleViewportModal() {
     modal.style.right = '';
     modal.style.bottom = '';
     modal.style.inset = '';
+    modal.style.removeProperty('--cpgl-touch-shell-width');
+    modal.style.removeProperty('--cpgl-touch-shell-height');
 }
 
 function syncVisibleViewportModal() {
@@ -2361,6 +2363,14 @@ function syncVisibleViewportModal() {
     const viewport = window.visualViewport;
     const width = Number(viewport.width || window.innerWidth || document.documentElement.clientWidth || 0);
     const height = Number(viewport.height || window.innerHeight || document.documentElement.clientHeight || 0);
+    const scale = Number(viewport.scale || 1);
+    const desktopScaledTouch = width > 620 && isTouchViewport();
+    const desiredShellWidth = desktopScaledTouch
+        ? Math.max(320, width - 16)
+        : Math.min(Math.max(320, width - 16), Math.max(320, 430 / Math.max(scale, 0.4)));
+    const desiredShellHeight = desktopScaledTouch
+        ? Math.max(520, height - 16)
+        : Math.min(Math.max(520, height - 16), Math.max(520, 720 / Math.max(scale, 0.4)));
     modal.classList.add('cpgl-visual-viewport');
     modal.classList.add('cpgl-touch-modal');
     modal.dataset.cpglViewport = [
@@ -2368,6 +2378,8 @@ function syncVisibleViewportModal() {
         `vv=${Math.round(viewport.width || 0)}x${Math.round(viewport.height || 0)}`,
         `offset=${Math.round(viewport.offsetLeft || 0)},${Math.round(viewport.offsetTop || 0)}`,
         `used=${Math.round(width)}x${Math.round(height)}`,
+        `shell=${Math.round(desiredShellWidth)}x${Math.round(desiredShellHeight)}`,
+        `scale=${scale}`,
     ].join(' ');
     modal.style.inset = 'auto';
     modal.style.left = `${viewport.offsetLeft || 0}px`;
@@ -2376,6 +2388,8 @@ function syncVisibleViewportModal() {
     modal.style.height = `${height}px`;
     modal.style.right = 'auto';
     modal.style.bottom = 'auto';
+    modal.style.setProperty('--cpgl-touch-shell-width', `${desiredShellWidth}px`);
+    modal.style.setProperty('--cpgl-touch-shell-height', `${desiredShellHeight}px`);
 }
 
 function renderManagerModal() {

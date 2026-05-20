@@ -150,8 +150,8 @@
 }
 
 .cpgl-modal-backdrop.cpgl-visual-viewport .cpgl-app-shell {
-    width: min(430px, 100%);
-    height: min(720px, 100%);
+    width: min(var(--cpgl-touch-shell-width, 430px), 100%);
+    height: min(var(--cpgl-touch-shell-height, 720px), 100%);
     max-width: none;
     max-height: none;
     border-radius: 12px;
