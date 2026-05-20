@@ -4,7 +4,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.10';
+const MODULE_VERSION = '0.1.11';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
@@ -86,6 +86,8 @@ const state = {
     generationCounter: 0,
     debugTapCounter: 0,
     debugErrorProbeBound: false,
+    frontendInitialized: false,
+    settingsEventsBound: false,
 };
 
 function getContext() {
@@ -1727,31 +1729,32 @@ function clearRuntimeState() {
 }
 
 function renderSettings() {
-    if ($('#chatpulse_group_logic_settings').length) return;
-    const settings = getSettings();
-    const html = `
-    <div id="chatpulse_group_logic_settings" class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header">
-            <b>ChatPulse Group Logic</b>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
-        <div class="inline-drawer-content">
-            <div class="cpgl-grid">
-                <label class="checkbox_label">
-                    <input id="cpgl_enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>
-                    显示 ChatPulse 独立群聊入口
-                </label>
-                <div class="cpgl-row">
-                    <label for="cpgl_context_limit">新群默认上下文条数</label>
-                    <input id="cpgl_context_limit" type="number" min="4" max="80" step="1" value="${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit}">
-                </div>
-                <button id="cpgl_open_center_settings" class="menu_button cpgl-settings-open" type="button">打开独立群聊</button>
-                <div class="cpgl-hint">群成员、AI 互相接话、私聊注入、API 间隔、预设/正则、红包和清空记录都在独立群聊弹窗右侧管理。</div>
-                <div id="cpgl_status" class="cpgl-hint"></div>
+    if (!$('#chatpulse_group_logic_settings').length && $('#extensions_settings').length) {
+        const settings = getSettings();
+        const html = `
+        <div id="chatpulse_group_logic_settings" class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b>ChatPulse Group Logic</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
-        </div>
-    </div>`;
-    $('#extensions_settings').append(html);
+            <div class="inline-drawer-content">
+                <div class="cpgl-grid">
+                    <label class="checkbox_label">
+                        <input id="cpgl_enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>
+                        显示 ChatPulse 独立群聊入口
+                    </label>
+                    <div class="cpgl-row">
+                        <label for="cpgl_context_limit">新群默认上下文条数</label>
+                        <input id="cpgl_context_limit" type="number" min="4" max="80" step="1" value="${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit}">
+                    </div>
+                    <button id="cpgl_open_center_settings" class="menu_button cpgl-settings-open" type="button">打开独立群聊</button>
+                    <div class="cpgl-hint">群成员、AI 互相接话、私聊注入、API 间隔、预设/正则、红包和清空记录都在独立群聊弹窗右侧管理。</div>
+                    <div id="cpgl_status" class="cpgl-hint"></div>
+                </div>
+            </div>
+        </div>`;
+        $('#extensions_settings').append(html);
+    }
     renderOrchestratedEntry();
     renderManagerShell();
     bindSettingsEvents();
@@ -2728,21 +2731,23 @@ function toggleMessageSelection(messageId) {
 }
 
 function bindSettingsEvents() {
-    $('#cpgl_enabled').on('change', event => {
-        getSettings().enabled = event.target.checked;
-        getSettings().orchestratedEntry = event.target.checked;
-        saveSettings();
-        refreshStatus();
-    });
-    $('#cpgl_context_limit').on('input', event => {
-        getSettings().contextLimit = Math.max(4, Math.min(80, Number(event.target.value) || DEFAULT_SETTINGS.contextLimit));
-        getMetadata().contextLimit = getSettings().contextLimit;
-        saveSettings();
-        saveMetadata();
-        refreshStatus();
-    });
+    if (state.settingsEventsBound) return;
+    state.settingsEventsBound = true;
     $(document)
-        .off('click.cpglOpen touchend.cpglOpen')
+        .off('change.cpglSettings input.cpglSettings click.cpglOpen touchend.cpglOpen')
+        .on('change.cpglSettings', '#cpgl_enabled', event => {
+            getSettings().enabled = event.target.checked;
+            getSettings().orchestratedEntry = event.target.checked;
+            saveSettings();
+            refreshStatus();
+        })
+        .on('input.cpglSettings', '#cpgl_context_limit', event => {
+            getSettings().contextLimit = Math.max(4, Math.min(80, Number(event.target.value) || DEFAULT_SETTINGS.contextLimit));
+            getMetadata().contextLimit = getSettings().contextLimit;
+            saveSettings();
+            saveMetadata();
+            refreshStatus();
+        })
         .on('click.cpglOpen touchend.cpglOpen', '#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher', event => {
             if (event.currentTarget?.id === 'cpgl_launcher' && event.currentTarget.dataset.cpglSuppressClick === '1') return;
             safeOpenGroupCenter(event);
@@ -3151,6 +3156,22 @@ function refreshStatus() {
     renderManagerModal();
 }
 
+function initializeFrontend(reason = 'unknown') {
+    if (!document.body) return;
+    renderSettings();
+    renderOrchestratedEntry();
+    renderManagerShell();
+    bindSettingsEvents();
+    bindNativeOpenEntrypoints();
+    bindDebugClickProbe();
+    bindDraggableLauncher();
+    refreshStatus();
+    if (!state.frontendInitialized) {
+        state.frontendInitialized = true;
+        recordCpglDebug('frontend.initialized', { reason });
+    }
+}
+
 function registerEvents() {
     window.addEventListener('resize', refreshStatus);
     window.addEventListener('orientationchange', () => setTimeout(refreshStatus, 250));
@@ -3163,11 +3184,14 @@ function registerEvents() {
         clearRuntimeState();
         setTimeout(refreshStatus, 250);
     });
-    eventSource.on(event_types.APP_READY, () => {
-        renderSettings();
-        renderOrchestratedEntry();
-        refreshStatus();
-    });
+    eventSource.on(event_types.APP_READY, () => initializeFrontend('APP_READY'));
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => initializeFrontend('DOMContentLoaded'), { once: true });
+    } else {
+        initializeFrontend('document-ready');
+    }
+    setTimeout(() => initializeFrontend('boot-timeout-500'), 500);
+    setTimeout(() => initializeFrontend('boot-timeout-2000'), 2000);
 }
 
 registerEvents();
