@@ -55,6 +55,80 @@ async function init(router) {
     router.get('/recent', (_req, res) => {
         res.json({ logs: recentLogs });
     });
+
+    router.get('/diagnose', (_req, res) => {
+        res.type('html').send(`<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CPGL Diagnose</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 16px; line-height: 1.5; }
+        pre { white-space: pre-wrap; word-break: break-word; background: #111; color: #9f9; padding: 12px; border-radius: 8px; }
+        button { padding: 10px 14px; margin: 4px 0; }
+    </style>
+</head>
+<body>
+    <h3>ChatPulse Group Logic Diagnose</h3>
+    <button id="run">运行诊断</button>
+    <pre id="out">等待运行...</pre>
+    <script type="module">
+        const out = document.getElementById('out');
+        const write = (line) => { out.textContent += line + '\\n'; };
+        const reset = () => { out.textContent = ''; };
+        async function getToken() {
+            const response = await fetch('/csrf-token');
+            const data = await response.json();
+            return data.token || '';
+        }
+        async function postDebug(event, details = {}) {
+            const token = await getToken();
+            const response = await fetch('/api/plugins/chatpulse_group_logic_debug/log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                body: JSON.stringify({
+                    index: 0,
+                    event,
+                    at: new Date().toISOString(),
+                    details,
+                    viewport: {
+                        version: 'diagnose',
+                        location: location.href,
+                        layoutViewport: { width: innerWidth, height: innerHeight },
+                    },
+                }),
+            });
+            write('POST debug: ' + response.status);
+        }
+        async function checkText(url) {
+            const response = await fetch(url, { cache: 'no-store' });
+            const text = await response.text();
+            write(url + ' -> ' + response.status + ' ' + response.statusText + ' len=' + text.length);
+            write(text.slice(0, 220).replace(/\\n/g, ' '));
+            return { response, text };
+        }
+        async function run() {
+            reset();
+            try {
+                await postDebug('diagnose.page.loaded', { userAgent: navigator.userAgent });
+                await checkText('/api/extensions/discover');
+                await checkText('/scripts/extensions/third-party/ChatPulseGroupLogic/manifest.json');
+                await checkText('/scripts/extensions/third-party/ChatPulseGroupLogic/bootstrap.js');
+                write('import bootstrap.js ...');
+                await import('/scripts/extensions/third-party/ChatPulseGroupLogic/bootstrap.js?diagnose=' + Date.now());
+                write('import bootstrap.js done');
+            } catch (error) {
+                write('ERROR: ' + (error?.stack || error?.message || String(error)));
+                try { await postDebug('diagnose.page.error', { error: error?.message || String(error) }); } catch {}
+            }
+        }
+        document.getElementById('run').addEventListener('click', run);
+        run();
+    </script>
+</body>
+</html>`);
+    });
 }
 
 module.exports = {
