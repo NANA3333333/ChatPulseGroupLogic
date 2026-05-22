@@ -4,7 +4,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.16';
+const MODULE_VERSION = '0.1.17';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
@@ -2318,6 +2318,389 @@ function bindDebugErrorProbe() {
 
 bindDebugErrorProbe();
 
+function bindManagerLiveEvents() {
+    renderEmojiPicker();
+    $(document)
+        .off('.cpglManagerLive')
+        .on('click.cpglManagerLive', '#cpgl_manager_close', () => $('#cpgl_manager_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_show_create, #cpgl_mobile_create_group, #cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'))
+        .on('click.cpglManagerLive', '#cpgl_header_delete_messages', () => {
+            if (!getCurrentGroup()) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            setDeleteMode(!state.deleteMode);
+        })
+        .on('click.cpglManagerLive', '#cpgl_chat_messages .cpgl-message-select', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleMessageSelection(event.currentTarget.dataset.messageId);
+        })
+        .on('click.cpglManagerLive', '#cpgl_chat_messages .cpgl-message-wrapper.delete-mode, #cpgl_chat_messages .cpgl-system-delete-row.delete-mode', event => {
+            if ($(event.target).closest('button, details, summary').length) return;
+            toggleMessageSelection(event.currentTarget.dataset.messageId);
+        })
+        .on('click.cpglManagerLive', '#cpgl_delete_mode_cancel', () => setDeleteMode(false))
+        .on('click.cpglManagerLive', '#cpgl_delete_mode_all', () => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            state.selectedMessageIds = new Set((group.messages || []).map((message, index) => getLocalMessageId(message, index)));
+            renderChatMessages();
+            renderDeleteModeBar();
+        })
+        .on('click.cpglManagerLive', '#cpgl_delete_mode_delete', () => {
+            const group = getCurrentGroup();
+            if (!group || !state.selectedMessageIds.size) return;
+            const selectedIds = new Set(state.selectedMessageIds);
+            const confirmed = window.confirm(`确定删除选中的 ${selectedIds.size} 条对话记录吗？关联红包也会一起删除。`);
+            if (!confirmed) return;
+            const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
+            clearRuntimeState();
+            saveLocalState();
+            state.deleteMode = false;
+            state.selectedMessageIds.clear();
+            renderManagerModal();
+            toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_create_modal_close', () => $('#cpgl_create_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_create_modal', event => {
+            if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
+        })
+        .on('input.cpglManagerLive', '#cpgl_create_search', renderManagerModal)
+        .on('change.cpglManagerLive', '#cpgl_create_members input[type="checkbox"]', event => {
+            if (event.target.checked) {
+                state.createMemberAvatars.add(event.target.value);
+            } else {
+                state.createMemberAvatars.delete(event.target.value);
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_manage_toggle', () => $('#cpgl_manage_drawer').toggleClass('is-open'))
+        .on('click.cpglManagerLive', '#cpgl_manage_close', () => $('#cpgl_manage_drawer').removeClass('is-open'))
+        .on('click.cpglManagerLive', '#cpgl_emoji_toggle', () => {
+            hideMentionMenu();
+            $('#cpgl_emoji_picker').toggle();
+        })
+        .on('click.cpglManagerLive', '#cpgl_emoji_picker .cpgl-emoji-item', event => {
+            addEmojiToComposer(event.currentTarget.dataset.emoji || event.currentTarget.textContent || '');
+        })
+        .on('click.cpglManagerLive', '#cpgl_emoji_close', hideEmojiPicker)
+        .on('click.cpglManagerLive', '#cpgl_quick_redpacket', () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            $('#cpgl_user_packet_count').val(Math.max(1, (group.members || []).length));
+            updatePacketPreview();
+            $('#cpgl_redpacket_modal').css('display', 'flex');
+            $('#cpgl_user_packet_amount').trigger('focus');
+        })
+        .on('click.cpglManagerLive', '#cpgl_redpacket_close', () => $('#cpgl_redpacket_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_redpacket_modal', event => {
+            if (event.target.id === 'cpgl_redpacket_modal') $('#cpgl_redpacket_modal').hide();
+        })
+        .on('click.cpglManagerLive', '#cpgl_packet_lucky', () => {
+            $('#cpgl_packet_lucky').addClass('active');
+            $('#cpgl_packet_fixed').removeClass('active');
+            updatePacketPreview();
+        })
+        .on('click.cpglManagerLive', '#cpgl_packet_fixed', () => {
+            $('#cpgl_packet_fixed').addClass('active');
+            $('#cpgl_packet_lucky').removeClass('active');
+            updatePacketPreview();
+        })
+        .on('input.cpglManagerLive', '#cpgl_user_packet_amount, #cpgl_user_packet_count', updatePacketPreview)
+        .on('click.cpglManagerLive', '#cpgl_rename_group', async () => {
+            try {
+                const group = getCurrentGroup();
+                if (!group) return;
+                const name = normalizeText($('#cpgl_group_name_input').val());
+                if (!name) {
+                    toastr.warning('群名不能为空。');
+                    return;
+                }
+                group.name = name;
+                await saveStGroup(group);
+                renderManagerModal();
+                refreshStatus();
+            } catch (error) {
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('keydown.cpglManagerLive', '#cpgl_group_name_input', event => {
+            if (event.key === 'Enter') $('#cpgl_rename_group').trigger('click');
+        })
+        .on('change.cpglManagerLive', '#cpgl_drawer_no_chain', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            group.noChain = event.target.checked;
+            saveLocalState();
+            refreshStatus();
+        })
+        .on('input.cpglManagerLive', '#cpgl_drawer_inject_limit', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            group.injectLimit = Math.max(0, Math.min(30, Number(event.target.value) || 0));
+            $('#cpgl_drawer_inject_value').text(group.injectLimit);
+            saveLocalState();
+        })
+        .on('input.cpglManagerLive', '#cpgl_drawer_context_limit', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            const value = Math.max(4, Math.min(80, Number(event.target.value) || DEFAULT_SETTINGS.contextLimit));
+            group.contextLimit = value;
+            $('#cpgl_drawer_context_value').text(value);
+            saveLocalState();
+            refreshStatus();
+        })
+        .on('input.cpglManagerLive', '#cpgl_api_base_delay', event => {
+            getSettings().apiDelayBaseMs = Math.max(0, Number(event.target.value) || 0);
+            $('#cpgl_api_base_value').text(formatSeconds(getSettings().apiDelayBaseMs));
+            saveSettings();
+        })
+        .on('input.cpglManagerLive', '#cpgl_api_step_delay', event => {
+            getSettings().apiDelayStepMs = Math.max(0, Number(event.target.value) || 0);
+            $('#cpgl_api_step_value').text(formatSeconds(getSettings().apiDelayStepMs));
+            saveSettings();
+        })
+        .on('input.cpglManagerLive', '#cpgl_api_max_delay', event => {
+            getSettings().apiDelayMaxMs = Math.max(3000, Number(event.target.value) || DEFAULT_SETTINGS.apiDelayMaxMs);
+            $('#cpgl_api_max_value').text(formatSeconds(getSettings().apiDelayMaxMs));
+            saveSettings();
+        })
+        .on('input.cpglManagerLive', '#cpgl_response_length', event => {
+            getSettings().responseLength = Math.max(500, Math.min(6000, Number(event.target.value) || DEFAULT_SETTINGS.responseLength));
+            $('#cpgl_response_length_value').text(getSettings().responseLength);
+            saveSettings();
+        })
+        .on('input.cpglManagerLive', '#cpgl_local_preset', event => {
+            getSettings().localPreset = String(event.target.value || '');
+            saveSettings();
+        })
+        .on('change.cpglManagerLive', '#cpgl_include_local_preset', event => {
+            getSettings().includeLocalPreset = event.target.checked;
+            saveSettings();
+        })
+        .on('input.cpglManagerLive', '#cpgl_local_regex', event => {
+            getSettings().localRegex = String(event.target.value || '');
+            saveSettings();
+        })
+        .on('click.cpglManagerLive', '#cpgl_import_preset_regex', () => $('#cpgl_import_file').trigger('click'))
+        .on('change.cpglManagerLive', '#cpgl_import_file', async event => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            try {
+                const data = JSON.parse(text);
+                if (typeof data.preset === 'string') getSettings().localPreset = data.preset;
+                if (typeof data.regex === 'string') getSettings().localRegex = data.regex;
+                if (Array.isArray(data.regex)) getSettings().localRegex = data.regex.join('\n');
+            } catch {
+                getSettings().localPreset = text;
+            }
+            saveSettings();
+            $('#cpgl_local_preset').val(getSettings().localPreset || '');
+            $('#cpgl_local_regex').val(getSettings().localRegex || '');
+            toastr.success('已导入弹窗专用预设/正则。', 'ChatPulse Group Logic');
+            event.target.value = '';
+        })
+        .on('click.cpglManagerLive', '#cpgl_clear_queue_danger', () => {
+            state.pendingMentionJobs = [];
+            state.orchestrator.postRoundMentions = [];
+            toastr.info('队列已清空。', 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_clear_messages_danger', () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            const confirmed = window.confirm(`确定删除「${group.name || '当前群聊'}」的所有对话记录和红包记录吗？`);
+            if (!confirmed) return;
+            group.messages = [];
+            group.redPackets = [];
+            group.debugLogs = [];
+            clearRuntimeState();
+            saveLocalState();
+            renderManagerModal();
+            toastr.success('对话记录已删除。', 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_clear_debug_logs', () => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            group.debugLogs = [];
+            saveLocalState();
+            renderDebugLogs();
+            toastr.info('调试记录已清空。', 'ChatPulse Group Logic');
+        })
+        .on('change.cpglManagerLive', '#cpgl_message_delete_list input[type="checkbox"]', () => {
+            const count = $('#cpgl_message_delete_list input[type="checkbox"]:checked').length;
+            $('#cpgl_delete_selected_messages').prop('disabled', count === 0).text(count ? `删除选中 (${count})` : '删除选中');
+        })
+        .on('click.cpglManagerLive', '#cpgl_select_all_messages', () => {
+            $('#cpgl_message_delete_list input[type="checkbox"]').prop('checked', true).trigger('change');
+        })
+        .on('click.cpglManagerLive', '#cpgl_select_no_messages', () => {
+            $('#cpgl_message_delete_list input[type="checkbox"]').prop('checked', false).trigger('change');
+        })
+        .on('click.cpglManagerLive', '#cpgl_delete_selected_messages', () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            const selectedIds = new Set($('#cpgl_message_delete_list input[type="checkbox"]:checked')
+                .map((_, input) => input.value)
+                .get());
+            if (!selectedIds.size) return;
+            const confirmed = window.confirm(`确定删除选中的 ${selectedIds.size} 条对话记录吗？关联红包也会一起删除。`);
+            if (!confirmed) return;
+            const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
+            clearRuntimeState();
+            state.deleteMode = false;
+            state.selectedMessageIds.clear();
+            saveLocalState();
+            renderManagerModal();
+            toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_interrupt_generation', () => {
+            state.typing = [];
+            state.pendingMentionJobs = [];
+            renderTypingIndicator();
+            toastr.info('已打断弹窗内队列。', 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_manager_modal', event => {
+            if (event.target.id === 'cpgl_manager_modal') $('#cpgl_manager_modal').hide();
+        })
+        .on('click.cpglManagerLive', '#cpgl_create_group', async () => {
+            try {
+                const avatars = [...state.createMemberAvatars];
+                await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars);
+                $('#cpgl_new_group_name').val('');
+                $('#cpgl_create_search').val('');
+                state.createMemberAvatars.clear();
+                $('#cpgl_create_modal').hide();
+                renderManagerModal();
+                refreshStatus();
+            } catch (error) {
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_group_list .cpgl-open-group', async event => {
+            try {
+                await openGroupConversation(event.currentTarget.dataset.groupId);
+            } catch (error) {
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_current_members .cpgl-kick-member', async event => {
+            try {
+                const group = getCurrentGroup();
+                if (!group) return;
+                await removeMemberFromGroup(group.id, event.currentTarget.dataset.avatar);
+            } catch (error) {
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_add_member', async () => {
+            try {
+                const group = getCurrentGroup();
+                const avatar = String($('#cpgl_add_member_select').val() || '');
+                if (!group || !avatar) return;
+                await addMembersToGroup(group.id, [avatar]);
+            } catch (error) {
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_user_packet_send', async () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            const isFixed = $('#cpgl_packet_fixed').hasClass('active');
+            const amount = Math.max(0, Number($('#cpgl_user_packet_amount').val()) || 0);
+            const count = Math.max(1, Number.parseInt($('#cpgl_user_packet_count').val(), 10) || 1);
+            const packet = {
+                mode: isFixed ? 'equal' : 'lucky',
+                total: isFixed ? amount * count : amount,
+                count,
+                note: normalizeText($('#cpgl_user_packet_note').val()) || '恭喜发财',
+            };
+            if (packet.total <= 0) {
+                toastr.warning('红包金额需要大于 0。');
+                return;
+            }
+            const createdPacket = createUserRedPacketMessage(packet);
+            $('#cpgl_user_packet_amount').val('');
+            $('#cpgl_user_packet_count').val('');
+            $('#cpgl_user_packet_note').val('');
+            updatePacketPreview();
+            $('#cpgl_redpacket_modal').hide();
+            toastr.success('红包已发到群聊。', 'ChatPulse Group Logic');
+            if (createdPacket) {
+                setTimeout(() => {
+                    runRedPacketReactionRound(createdPacket);
+                }, 500);
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_red_packet_list .cpgl-claim-packet', event => {
+            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
+            if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_chat_messages .cpgl-claim-packet', event => {
+            event.stopPropagation();
+            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
+            if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_entry_send', () => {
+            const text = $('#cpgl_entry_text').val();
+            $('#cpgl_entry_text').val('');
+            hideMentionMenu();
+            hideEmojiPicker();
+            runOrchestratedRound(text);
+        })
+        .on('input.cpglManagerLive click.cpglManagerLive keyup.cpglManagerLive', '#cpgl_entry_text', event => {
+            if (event.type === 'keyup' && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) return;
+            updateMentionMenuFromInput(event.currentTarget);
+        })
+        .on('keydown.cpglManagerLive', '#cpgl_entry_text', event => {
+            if (state.mention.open) {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    state.mention.index = (state.mention.index + 1) % state.mention.options.length;
+                    renderMentionMenu();
+                    return;
+                }
+                if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    state.mention.index = (state.mention.index - 1 + state.mention.options.length) % state.mention.options.length;
+                    renderMentionMenu();
+                    return;
+                }
+                if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
+                    event.preventDefault();
+                    chooseMention();
+                    return;
+                }
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    hideMentionMenu();
+                    hideEmojiPicker();
+                    return;
+                }
+            }
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                $('#cpgl_entry_send').trigger('click');
+            }
+        })
+        .on('mousedown.cpglManagerLive', '#cpgl_mention_menu .cpgl-mention-item', event => {
+            event.preventDefault();
+            chooseMention(Number(event.currentTarget.dataset.index) || 0);
+        });
+}
+
 function getLocalMessageId(message, index) {
     return String(message?.id || index);
 }
@@ -2466,6 +2849,7 @@ function openGroupCenter() {
     if (!$('#cpgl_manager_modal').length) {
         renderManagerShell();
     }
+    renderEmojiPicker();
     loadLocalState();
     renderManagerModal();
     syncVisibleViewportModal();
@@ -2815,387 +3199,8 @@ function bindSettingsEvents() {
             if (event.currentTarget?.id === 'cpgl_launcher' && event.currentTarget.dataset.cpglSuppressClick === '1') return;
             safeOpenGroupCenter(event);
         });
-    $('#cpgl_manager_close').on('click', () => $('#cpgl_manager_modal').hide());
-    $('#cpgl_show_create').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
-    $('#cpgl_mobile_create_group').on('click', () => $('#cpgl_create_modal').css('display', 'flex'));
-    $('#cpgl_chat_messages').on('click', '#cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'));
-    $('#cpgl_header_delete_messages').on('click', () => {
-        if (!getCurrentGroup()) {
-            toastr.warning('请先进入一个群聊。');
-            return;
-        }
-        setDeleteMode(!state.deleteMode);
-    });
-    $('#cpgl_chat_messages').on('click', '.cpgl-message-select', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleMessageSelection(event.currentTarget.dataset.messageId);
-    });
-    $('#cpgl_chat_messages').on('click', '.cpgl-message-wrapper.delete-mode, .cpgl-system-delete-row.delete-mode', event => {
-        if ($(event.target).closest('button, details, summary').length) return;
-        toggleMessageSelection(event.currentTarget.dataset.messageId);
-    });
-    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_cancel', () => setDeleteMode(false));
-    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_all', () => {
-        const group = getCurrentGroup();
-        if (!group) return;
-        state.selectedMessageIds = new Set((group.messages || []).map((message, index) => getLocalMessageId(message, index)));
-        renderChatMessages();
-        renderDeleteModeBar();
-    });
-    $('#cpgl_delete_mode_bar').on('click', '#cpgl_delete_mode_delete', () => {
-        const group = getCurrentGroup();
-        if (!group || !state.selectedMessageIds.size) return;
-        const selectedIds = new Set(state.selectedMessageIds);
-        const confirmed = window.confirm(`确定删除选中的 ${selectedIds.size} 条对话记录吗？关联红包也会一起删除。`);
-        if (!confirmed) return;
-        const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
-        clearRuntimeState();
-        saveLocalState();
-        state.deleteMode = false;
-        state.selectedMessageIds.clear();
-        renderManagerModal();
-        toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
-    });
-    $('#cpgl_create_modal_close').on('click', () => $('#cpgl_create_modal').hide());
-    $('#cpgl_create_modal').on('click', event => {
-        if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
-    });
-    $('#cpgl_create_search').on('input', renderManagerModal);
-    $('#cpgl_create_members').on('change', 'input[type="checkbox"]', event => {
-        if (event.target.checked) {
-            state.createMemberAvatars.add(event.target.value);
-        } else {
-            state.createMemberAvatars.delete(event.target.value);
-        }
-    });
-    $('#cpgl_manage_toggle').on('click', () => $('#cpgl_manage_drawer').toggleClass('is-open'));
-    $('#cpgl_manage_close').on('click', () => $('#cpgl_manage_drawer').removeClass('is-open'));
-    renderEmojiPicker();
-    $('#cpgl_emoji_toggle').on('click', () => {
-        hideMentionMenu();
-        $('#cpgl_emoji_picker').toggle();
-    });
-    $('#cpgl_emoji_picker').on('click', '.cpgl-emoji-item', event => {
-        addEmojiToComposer(event.currentTarget.dataset.emoji || event.currentTarget.textContent || '');
-    });
-    $('#cpgl_emoji_picker').on('click', '#cpgl_emoji_close', hideEmojiPicker);
-    $('#cpgl_quick_redpacket').on('click', () => {
-        const group = getCurrentGroup();
-        if (!group) {
-            toastr.warning('请先进入一个群聊。');
-            return;
-        }
-        $('#cpgl_user_packet_count').val(Math.max(1, (group.members || []).length));
-        updatePacketPreview();
-        $('#cpgl_redpacket_modal').css('display', 'flex');
-        $('#cpgl_user_packet_amount').trigger('focus');
-    });
-    $('#cpgl_redpacket_close').on('click', () => $('#cpgl_redpacket_modal').hide());
-    $('#cpgl_redpacket_modal').on('click', event => {
-        if (event.target.id === 'cpgl_redpacket_modal') $('#cpgl_redpacket_modal').hide();
-    });
-    $('#cpgl_packet_lucky').on('click', () => {
-        $('#cpgl_packet_lucky').addClass('active');
-        $('#cpgl_packet_fixed').removeClass('active');
-        updatePacketPreview();
-    });
-    $('#cpgl_packet_fixed').on('click', () => {
-        $('#cpgl_packet_fixed').addClass('active');
-        $('#cpgl_packet_lucky').removeClass('active');
-        updatePacketPreview();
-    });
-    $('#cpgl_user_packet_amount').on('input', updatePacketPreview);
-    $('#cpgl_user_packet_count').on('input', updatePacketPreview);
-    $('#cpgl_rename_group').on('click', async () => {
-        try {
-            const group = getCurrentGroup();
-            if (!group) return;
-            const name = normalizeText($('#cpgl_group_name_input').val());
-            if (!name) {
-                toastr.warning('群名不能为空。');
-                return;
-            }
-            group.name = name;
-            await saveStGroup(group);
-            renderManagerModal();
-            refreshStatus();
-        } catch (error) {
-            toastr.error(error.message || String(error), 'ChatPulse Group Logic');
-        }
-    });
-    $('#cpgl_group_name_input').on('keydown', event => {
-        if (event.key === 'Enter') $('#cpgl_rename_group').trigger('click');
-    });
-    $('#cpgl_drawer_no_chain').on('change', async event => {
-        const group = getCurrentGroup();
-        if (!group) return;
-        group.noChain = event.target.checked;
-        saveLocalState();
-        refreshStatus();
-    });
-    $('#cpgl_drawer_inject_limit').on('input', async event => {
-        const group = getCurrentGroup();
-        if (!group) return;
-        group.injectLimit = Math.max(0, Math.min(30, Number(event.target.value) || 0));
-        $('#cpgl_drawer_inject_value').text(group.injectLimit);
-        saveLocalState();
-    });
-    $('#cpgl_drawer_context_limit').on('input', async event => {
-        const group = getCurrentGroup();
-        if (!group) return;
-        const value = Math.max(4, Math.min(80, Number(event.target.value) || DEFAULT_SETTINGS.contextLimit));
-        group.contextLimit = value;
-        $('#cpgl_drawer_context_value').text(value);
-        saveLocalState();
-        refreshStatus();
-    });
-    $('#cpgl_api_base_delay').on('input', event => {
-        getSettings().apiDelayBaseMs = Math.max(0, Number(event.target.value) || 0);
-        $('#cpgl_api_base_value').text(formatSeconds(getSettings().apiDelayBaseMs));
-        saveSettings();
-    });
-    $('#cpgl_api_step_delay').on('input', event => {
-        getSettings().apiDelayStepMs = Math.max(0, Number(event.target.value) || 0);
-        $('#cpgl_api_step_value').text(formatSeconds(getSettings().apiDelayStepMs));
-        saveSettings();
-    });
-    $('#cpgl_api_max_delay').on('input', event => {
-        getSettings().apiDelayMaxMs = Math.max(3000, Number(event.target.value) || DEFAULT_SETTINGS.apiDelayMaxMs);
-        $('#cpgl_api_max_value').text(formatSeconds(getSettings().apiDelayMaxMs));
-        saveSettings();
-    });
-    $('#cpgl_response_length').on('input', event => {
-        getSettings().responseLength = Math.max(500, Math.min(6000, Number(event.target.value) || DEFAULT_SETTINGS.responseLength));
-        $('#cpgl_response_length_value').text(getSettings().responseLength);
-        saveSettings();
-    });
-    $('#cpgl_local_preset').on('input', event => {
-        getSettings().localPreset = String(event.target.value || '');
-        saveSettings();
-    });
-    $('#cpgl_include_local_preset').on('change', event => {
-        getSettings().includeLocalPreset = event.target.checked;
-        saveSettings();
-    });
-    $('#cpgl_local_regex').on('input', event => {
-        getSettings().localRegex = String(event.target.value || '');
-        saveSettings();
-    });
-    $('#cpgl_import_preset_regex').on('click', () => $('#cpgl_import_file').trigger('click'));
-    $('#cpgl_import_file').on('change', async event => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        const text = await file.text();
-        try {
-            const data = JSON.parse(text);
-            if (typeof data.preset === 'string') getSettings().localPreset = data.preset;
-            if (typeof data.regex === 'string') getSettings().localRegex = data.regex;
-            if (Array.isArray(data.regex)) getSettings().localRegex = data.regex.join('\n');
-        } catch {
-            getSettings().localPreset = text;
-        }
-        saveSettings();
-        $('#cpgl_local_preset').val(getSettings().localPreset || '');
-        $('#cpgl_local_regex').val(getSettings().localRegex || '');
-        toastr.success('已导入弹窗专用预设/正则。', 'ChatPulse Group Logic');
-        event.target.value = '';
-    });
-    $('#cpgl_clear_queue_danger').on('click', () => {
-        state.pendingMentionJobs = [];
-        state.orchestrator.postRoundMentions = [];
-        toastr.info('队列已清空。', 'ChatPulse Group Logic');
-    });
-    $('#cpgl_clear_messages_danger').on('click', () => {
-        const group = getCurrentGroup();
-        if (!group) {
-            toastr.warning('请先进入一个群聊。');
-            return;
-        }
-        const confirmed = window.confirm(`确定删除「${group.name || '当前群聊'}」的所有对话记录和红包记录吗？`);
-        if (!confirmed) return;
-        group.messages = [];
-        group.redPackets = [];
-        group.debugLogs = [];
-        clearRuntimeState();
-        saveLocalState();
-        renderManagerModal();
-        toastr.success('对话记录已删除。', 'ChatPulse Group Logic');
-    });
-    $('#cpgl_clear_debug_logs').on('click', () => {
-        const group = getCurrentGroup();
-        if (!group) return;
-        group.debugLogs = [];
-        saveLocalState();
-        renderDebugLogs();
-        toastr.info('调试记录已清空。', 'ChatPulse Group Logic');
-    });
-    $('#cpgl_message_delete_list').on('change', 'input[type="checkbox"]', () => {
-        const count = $('#cpgl_message_delete_list input[type="checkbox"]:checked').length;
-        $('#cpgl_delete_selected_messages').prop('disabled', count === 0).text(count ? `删除选中 (${count})` : '删除选中');
-    });
-    $('#cpgl_select_all_messages').on('click', () => {
-        $('#cpgl_message_delete_list input[type="checkbox"]').prop('checked', true).trigger('change');
-    });
-    $('#cpgl_select_no_messages').on('click', () => {
-        $('#cpgl_message_delete_list input[type="checkbox"]').prop('checked', false).trigger('change');
-    });
-    $('#cpgl_delete_selected_messages').on('click', () => {
-        const group = getCurrentGroup();
-        if (!group) {
-            toastr.warning('请先进入一个群聊。');
-            return;
-        }
-        const selectedIds = new Set($('#cpgl_message_delete_list input[type="checkbox"]:checked')
-            .map((_, input) => input.value)
-            .get());
-        if (!selectedIds.size) return;
-        const confirmed = window.confirm(`确定删除选中的 ${selectedIds.size} 条对话记录吗？关联红包也会一起删除。`);
-        if (!confirmed) return;
-        const deleted = deleteSelectedMessagesFromGroup(group, selectedIds);
-        clearRuntimeState();
-        state.deleteMode = false;
-        state.selectedMessageIds.clear();
-        saveLocalState();
-        renderManagerModal();
-        toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
-    });
-    $('#cpgl_typing_indicator').on('click', '#cpgl_interrupt_generation', () => {
-        state.typing = [];
-        state.pendingMentionJobs = [];
-        renderTypingIndicator();
-        toastr.info('已打断弹窗内队列。', 'ChatPulse Group Logic');
-    });
-    $('#cpgl_manager_modal').on('click', event => {
-        if (event.target.id === 'cpgl_manager_modal') $('#cpgl_manager_modal').hide();
-    });
-    $('#cpgl_create_group').on('click', async () => {
-        try {
-            const avatars = [...state.createMemberAvatars];
-            await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars);
-            $('#cpgl_new_group_name').val('');
-            $('#cpgl_create_search').val('');
-            state.createMemberAvatars.clear();
-            $('#cpgl_create_modal').hide();
-            renderManagerModal();
-            refreshStatus();
-        } catch (error) {
-            toastr.error(error.message || String(error), 'ChatPulse Group Logic');
-        }
-    });
-    $('#cpgl_group_list').on('click', '.cpgl-open-group', async event => {
-        try {
-            await openGroupConversation(event.currentTarget.dataset.groupId);
-        } catch (error) {
-            toastr.error(error.message || String(error), 'ChatPulse Group Logic');
-        }
-    });
-    $('#cpgl_current_members').on('click', '.cpgl-kick-member', async event => {
-        try {
-            const group = getCurrentGroup();
-            if (!group) return;
-            await removeMemberFromGroup(group.id, event.currentTarget.dataset.avatar);
-        } catch (error) {
-            toastr.error(error.message || String(error), 'ChatPulse Group Logic');
-        }
-    });
-    $('#cpgl_add_member').on('click', async () => {
-        try {
-            const group = getCurrentGroup();
-            const avatar = String($('#cpgl_add_member_select').val() || '');
-            if (!group || !avatar) return;
-            await addMembersToGroup(group.id, [avatar]);
-        } catch (error) {
-            toastr.error(error.message || String(error), 'ChatPulse Group Logic');
-        }
-    });
-    $('#cpgl_user_packet_send').on('click', async () => {
-        const group = getCurrentGroup();
-        if (!group) {
-            toastr.warning('请先进入一个群聊。');
-            return;
-        }
-        const isFixed = $('#cpgl_packet_fixed').hasClass('active');
-        const amount = Math.max(0, Number($('#cpgl_user_packet_amount').val()) || 0);
-        const count = Math.max(1, Number.parseInt($('#cpgl_user_packet_count').val(), 10) || 1);
-        const packet = {
-            mode: isFixed ? 'equal' : 'lucky',
-            total: isFixed ? amount * count : amount,
-            count,
-            note: normalizeText($('#cpgl_user_packet_note').val()) || '恭喜发财',
-        };
-        if (packet.total <= 0) {
-            toastr.warning('红包金额需要大于 0。');
-            return;
-        }
-        const createdPacket = createUserRedPacketMessage(packet);
-        $('#cpgl_user_packet_amount').val('');
-        $('#cpgl_user_packet_count').val('');
-        $('#cpgl_user_packet_note').val('');
-        updatePacketPreview();
-        $('#cpgl_redpacket_modal').hide();
-        toastr.success('红包已发到群聊。', 'ChatPulse Group Logic');
-        if (createdPacket) {
-            setTimeout(() => {
-                runRedPacketReactionRound(createdPacket);
-            }, 500);
-        }
-    });
-    $('#cpgl_red_packet_list').on('click', '.cpgl-claim-packet', event => {
-        const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
-        if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
-    });
-    $('#cpgl_chat_messages').on('click', '.cpgl-claim-packet', event => {
-        event.stopPropagation();
-        const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
-        if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
-    });
-    $('#cpgl_entry_send').on('click', () => {
-        const text = $('#cpgl_entry_text').val();
-        $('#cpgl_entry_text').val('');
-        hideMentionMenu();
-        hideEmojiPicker();
-        runOrchestratedRound(text);
-    });
-    $('#cpgl_entry_text').on('input click keyup', event => {
-        if (event.type === 'keyup' && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) return;
-        updateMentionMenuFromInput(event.currentTarget);
-    });
-    $('#cpgl_entry_text').on('keydown', event => {
-        if (state.mention.open) {
-            if (event.key === 'ArrowDown') {
-                event.preventDefault();
-                state.mention.index = (state.mention.index + 1) % state.mention.options.length;
-                renderMentionMenu();
-                return;
-            }
-            if (event.key === 'ArrowUp') {
-                event.preventDefault();
-                state.mention.index = (state.mention.index - 1 + state.mention.options.length) % state.mention.options.length;
-                renderMentionMenu();
-                return;
-            }
-            if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
-                event.preventDefault();
-                chooseMention();
-                return;
-            }
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                hideMentionMenu();
-                hideEmojiPicker();
-                return;
-            }
-        }
-        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-            event.preventDefault();
-            $('#cpgl_entry_send').trigger('click');
-        }
-    });
-    $('#cpgl_mention_menu').on('mousedown', '.cpgl-mention-item', event => {
-        event.preventDefault();
-        chooseMention(Number(event.currentTarget.dataset.index) || 0);
-    });
+    bindManagerLiveEvents();
+    return;
 }
 
 function refreshStatus() {
