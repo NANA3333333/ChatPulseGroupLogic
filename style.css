@@ -54,7 +54,7 @@
     top: 50vh;
     right: auto;
     bottom: auto;
-    z-index: 41000;
+    z-index: 2147483000;
     display: inline-flex;
     align-items: center;
     gap: 10px;
@@ -67,7 +67,9 @@
     box-shadow: 0 10px 28px rgba(123, 159, 224, 0.38);
     cursor: pointer;
     font-family: inherit;
-    touch-action: none;
+    touch-action: manipulation;
+    pointer-events: auto !important;
+    -webkit-tap-highlight-color: transparent;
     user-select: none;
     transform: translate(-50%, -50%);
 }
@@ -119,7 +121,7 @@
     --cpgl-gradient-btn: linear-gradient(135deg, #7b9fe0 0%, #9bb5e8 50%, #c4a0e8 100%);
     position: fixed;
     inset: 0;
-    z-index: 40000;
+    z-index: 2147483200;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1324,7 +1326,7 @@
 .cpgl-create-modal {
     position: fixed;
     inset: 0;
-    z-index: 41000;
+    z-index: 2147483300;
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.42);
@@ -1334,7 +1336,7 @@
 .cpgl-redpacket-modal {
     position: fixed;
     inset: 0;
-    z-index: 41200;
+    z-index: 2147483400;
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.5);

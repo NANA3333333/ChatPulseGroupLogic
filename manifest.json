@@ -6,7 +6,7 @@
     "js": "bootstrap.js",
     "css": "style.css",
     "author": "Nana + Codex",
-    "version": "0.1.14",
+    "version": "0.1.15",
     "homePage": "https://github.com/NANA3333333/ChatPulseGroupLogic",
     "generate_interceptor": "chatPulseGroupLogicInterceptor"
 }

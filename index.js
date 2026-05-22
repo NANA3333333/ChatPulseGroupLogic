@@ -4,7 +4,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.14';
+const MODULE_VERSION = '0.1.15';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
@@ -1828,6 +1828,15 @@ function bindDraggableLauncher() {
 
     button.addEventListener('pointerdown', event => {
         if (event.button !== undefined && event.button !== 0) return;
+        if (isTouchViewport()) {
+            safeOpenGroupCenter(event, {
+                element: button,
+                via: 'launcher-pointerdown',
+                actualTarget: event.target,
+                point: getEventClientPoint(event),
+            });
+            return;
+        }
         const rect = button.getBoundingClientRect();
         drag = {
             pointerId: event.pointerId,
@@ -2139,6 +2148,54 @@ function describeElementForDebug(element) {
     return `${element.tagName?.toLowerCase?.() || 'node'}${id}${classes}${text ? ` "${text}"` : ''}`;
 }
 
+const OPEN_ENTRY_SELECTOR = '#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher';
+
+function getEventClientPoint(event) {
+    const touch = event?.changedTouches?.[0] || event?.touches?.[0];
+    const x = Number(touch?.clientX ?? event?.clientX);
+    const y = Number(touch?.clientY ?? event?.clientY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
+}
+
+function isPointInsideElement(element, point, padding = 0) {
+    if (!element || !point) return false;
+    const rect = element.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    return point.x >= rect.left - padding
+        && point.x <= rect.right + padding
+        && point.y >= rect.top - padding
+        && point.y <= rect.bottom + padding;
+}
+
+function getOpenEntrypointFromEvent(event) {
+    const directTarget = event?.target?.closest?.(OPEN_ENTRY_SELECTOR);
+    if (directTarget) {
+        return {
+            element: directTarget,
+            via: 'target',
+            point: getEventClientPoint(event),
+            actualTarget: event.target,
+        };
+    }
+
+    const point = getEventClientPoint(event);
+    const launcher = document.getElementById('cpgl_launcher');
+    const launcherVisible = launcher && getComputedStyle(launcher).display !== 'none';
+    const hitPadding = isTouchViewport() ? 18 : 4;
+    if (launcherVisible && isPointInsideElement(launcher, point, hitPadding)) {
+        return {
+            element: launcher,
+            via: 'launcher-hitbox',
+            point,
+            actualTarget: event?.target,
+            topElement: document.elementFromPoint?.(point.x, point.y),
+        };
+    }
+
+    return null;
+}
+
 function getDebugViewportSnapshot() {
     const modal = document.getElementById('cpgl_manager_modal');
     const shell = modal?.querySelector?.('.cpgl-app-shell');
@@ -2220,15 +2277,21 @@ function bindDebugClickProbe() {
         '#cpgl_manager_modal textarea',
     ].join(', ');
     const handler = event => {
-        const target = event.target?.closest?.(selector);
+        const entrypoint = getOpenEntrypointFromEvent(event);
+        const target = event.target?.closest?.(selector) || entrypoint?.element;
         if (!target) return;
         recordCpglDebug(`ui.${event.type}`, {
             element: describeElementForDebug(target),
+            via: entrypoint?.via || 'target',
+            actualTarget: describeElementForDebug(entrypoint?.actualTarget || event.target),
+            topElement: describeElementForDebug(entrypoint?.topElement),
+            point: entrypoint?.point ? `${Math.round(entrypoint.point.x)},${Math.round(entrypoint.point.y)}` : '',
             id: target.id || '',
             value: target.matches?.('input, textarea, select') ? String(target.value || '').slice(0, 80) : '',
         });
     };
     document.addEventListener('pointerdown', handler, true);
+    document.addEventListener('touchstart', handler, { capture: true, passive: true });
     document.addEventListener('touchend', handler, { capture: true, passive: true });
     document.addEventListener('click', handler, true);
 }
@@ -2415,22 +2478,15 @@ async function openGroupConversation(groupId) {
     renderManagerModal();
 }
 
-function safeOpenGroupCenter(event) {
-    if (event?.type === 'touchend') {
+function safeOpenGroupCenter(event, source = null) {
+    const directEventTypes = new Set(['touchstart', 'touchend', 'pointerdown', 'pointerup']);
+    if (directEventTypes.has(event?.type)) {
         const now = Date.now();
-        const lastTouch = Number(safeOpenGroupCenter.lastTouchAt || 0);
-        safeOpenGroupCenter.lastTouchAt = now;
-        if (now - lastTouch < 350) return;
-    } else if (event?.type === 'pointerup') {
-        const now = Date.now();
-        const lastPointer = Number(safeOpenGroupCenter.lastPointerAt || 0);
-        safeOpenGroupCenter.lastPointerAt = now;
-        if (now - lastPointer < 350) return;
+        const lastDirect = Number(safeOpenGroupCenter.lastDirectAt || 0);
+        safeOpenGroupCenter.lastDirectAt = now;
+        if (now - lastDirect < 350) return;
     } else if (event?.type === 'click') {
-        const lastDirectOpen = Math.max(
-            Number(safeOpenGroupCenter.lastTouchAt || 0),
-            Number(safeOpenGroupCenter.lastPointerAt || 0),
-        );
+        const lastDirectOpen = Number(safeOpenGroupCenter.lastDirectAt || 0);
         if (Date.now() - lastDirectOpen < 350) return;
     }
 
@@ -2439,7 +2495,11 @@ function safeOpenGroupCenter(event) {
     try {
         recordCpglDebug('safeOpenGroupCenter.invoke', {
             eventType: event?.type || '',
-            element: describeElementForDebug(event?.target?.closest?.('#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher') || event?.target),
+            element: describeElementForDebug(source?.element || event?.target?.closest?.(OPEN_ENTRY_SELECTOR) || event?.target),
+            via: source?.via || 'target',
+            actualTarget: describeElementForDebug(source?.actualTarget || event?.target),
+            topElement: describeElementForDebug(source?.topElement),
+            point: source?.point ? `${Math.round(source.point.x)},${Math.round(source.point.y)}` : '',
         });
         openGroupCenter();
     } catch (error) {
@@ -2452,13 +2512,16 @@ function safeOpenGroupCenter(event) {
 function bindNativeOpenEntrypoints() {
     if (document.body?.dataset.cpglNativeOpenBound === '1') return;
     if (document.body) document.body.dataset.cpglNativeOpenBound = '1';
-    const selector = '#cpgl_open_center_settings, #cpgl_top_launcher, #cpgl_launcher';
     const handler = event => {
-        const target = event.target?.closest?.(selector);
-        if (!target) return;
-        if (target.id === 'cpgl_launcher' && target.dataset.cpglSuppressClick === '1') return;
-        safeOpenGroupCenter(event);
+        const entrypoint = getOpenEntrypointFromEvent(event);
+        if (!entrypoint) return;
+        if (entrypoint.element.id === 'cpgl_launcher' && entrypoint.element.dataset.cpglSuppressClick === '1') return;
+        if (entrypoint.via === 'launcher-hitbox' && $('#cpgl_manager_modal').is(':visible')) return;
+        if ((event.type === 'pointerdown' || event.type === 'touchstart') && !isTouchViewport()) return;
+        safeOpenGroupCenter(event, entrypoint);
     };
+    document.addEventListener('pointerdown', handler, true);
+    document.addEventListener('touchstart', handler, { capture: true, passive: false });
     document.addEventListener('touchend', handler, { capture: true, passive: false });
     document.addEventListener('click', handler, true);
 }
