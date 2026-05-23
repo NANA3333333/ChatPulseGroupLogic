@@ -3,10 +3,10 @@
     "loading_order": 95,
     "requires": [],
     "optional": [],
-    "js": "bootstrap.js?v=0.1.17",
-    "css": "style.css?v=0.1.17",
+    "js": "bootstrap.js?v=0.1.18",
+    "css": "style.css?v=0.1.18",
     "author": "Nana + Codex",
-    "version": "0.1.17",
+    "version": "0.1.18",
     "homePage": "https://github.com/NANA3333333/ChatPulseGroupLogic",
     "generate_interceptor": "chatPulseGroupLogicInterceptor"
 }
