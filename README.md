@@ -20,6 +20,11 @@
 - 本地红包记录和领取记录
 - 独立群聊弹窗内的预设、正则、API 间隔设置
 - 私聊和其他本地群聊记录注入
+- 群共享长期摘要，支持 R 原文窗口和 S 触发阈值
+- 长期摘要可选择当前模型或自定义 OpenAI-compatible 小模型 endpoint/model，支持读取 `/models` 下拉选择
+- 私聊读取群聊摘要、群聊读取角色私聊记忆的独立权限开关
+- 回复前自动总结窗口外未摘要消息，失败时中止本轮并提示重试
+- 运行队列面板，可查看当前轮询进度并请求跳过/停止
 - 可调 API 初始间隔、递增间隔和最大退避间隔，减少撞速率上限
 - 最近输入/输出调试记录
 - 清空队列、清空调试记录、清空当前群聊历史
@@ -64,8 +69,13 @@ cp -r ~/SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic/se
 1. 打开 SillyTavern。
 2. 启用 `ChatPulse Group Logic`。
 3. 点击 ChatPulse 独立群聊入口。
-4. 创建一个群聊，并选择成员。
+4. 创建一个群聊，选择本群使用的 User 人设，并选择成员。
 5. 在群聊弹窗里发送消息。
+
+更多接口和项目结构见：
+
+- [接口说明](API.md)
+- [项目说明](PROJECT.md)
 
 ## 群聊逻辑
 
@@ -100,7 +110,9 @@ cp -r ~/SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic/se
 - 群聊数据存储在浏览器 `localStorage`。
 - 不创建、不修改 SillyTavern 原生群聊。
 - 使用 SillyTavern 当前角色卡。
+- 每个群聊可以绑定一个 SillyTavern 已有 User 人设。
 - 允许 SillyTavern 世界书和用户人设参与角色生成。
+- 世界书不是必填项；可只使用角色卡、群历史和 User 人设。
 - 不依赖 ChatPulse 后端、数据库、城市模拟、向量记忆或情绪系统。
 - 这个扩展主要复制和移植 ChatPulse 群聊中适合在 SillyTavern 前端独立运行的部分逻辑。
 

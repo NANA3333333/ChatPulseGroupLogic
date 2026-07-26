@@ -1,4 +1,4 @@
-const CPGL_BOOT_VERSION = '0.1.18';
+const CPGL_BOOT_VERSION = '0.1.22';
 const CPGL_DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
 let cpglBootTokenPromise = null;
 
@@ -57,7 +57,7 @@ async function reportCpglBoot(event, details = {}) {
 
 reportCpglBoot('bootstrap.loaded');
 
-import('./index.js?v=0.1.18')
+import('./index.js?v=0.1.22')
     .then(() => reportCpglBoot('bootstrap.import.done'))
     .catch(error => {
         reportCpglBoot('bootstrap.import.error', {

@@ -1,10 +1,12 @@
-import { chat, characters, default_avatar, event_types, eventSource, generateQuietPrompt, getRequestHeaders, getThumbnailUrl, this_chid } from '../../../../script.js';
+import { chat, characters, default_avatar, default_user_avatar, event_types, eventSource, generateQuietPrompt, getRequestHeaders, getThumbnailUrl, this_chid } from '../../../../script.js';
+import { ChatCompletionService } from '../../../../scripts/custom-request.js';
 import { is_group_generating } from '../../../../scripts/group-chats.js';
+import { user_avatar } from '../../../../scripts/personas.js';
 import { power_user } from '../../../../scripts/power-user.js';
-import { loadWorldInfo, world_info } from '../../../../scripts/world-info.js';
+import { loadWorldInfo, world_info, world_names } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.18';
+const MODULE_VERSION = '0.1.22';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
 const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
@@ -27,6 +29,14 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiDelayStepMs: 1500,
     apiDelayMaxMs: 15000,
     responseLength: 3000,
+    memoryRawWindowR: 24,
+    memoryThresholdS: 16,
+    memorySummaryRounds: 3,
+    memorySummaryResponseLength: 1000,
+    summaryProvider: 'current',
+    summaryCustomUrl: '',
+    summaryCustomModel: '',
+    summaryTemperature: 0.2,
     includeLocalPreset: false,
     launcherPosition: null,
     localPreset: [
@@ -68,8 +78,22 @@ const state = {
         postRoundMentions: [],
         activeRedPacketId: null,
         redPacketEvents: [],
+        queue: {
+            active: false,
+            stopped: false,
+            skipCurrent: false,
+            type: '',
+            label: '',
+            message: '',
+            currentIndex: -1,
+            currentName: '',
+            startedAt: 0,
+            finishedAt: 0,
+            items: [],
+        },
     },
     createMemberAvatars: new Set(),
+    createUserPersonaAvatar: '',
     localGroups: [],
     activeGroupId: null,
     typing: [],
@@ -88,6 +112,12 @@ const state = {
     debugErrorProbeBound: false,
     frontendInitialized: false,
     settingsEventsBound: false,
+    summaryModelOptions: [],
+    summaryModelOptionsKey: '',
+    summaryModelOptionsLoading: false,
+    summaryModelOptionsError: '',
+    summaryModelMenuOpen: false,
+    summaryModelFilterActive: false,
 };
 
 function getContext() {
@@ -145,11 +175,151 @@ async function saveMetadata() {
     }
 }
 
+function clampInteger(value, min, max, fallback = min) {
+    const number = Number.parseInt(value, 10);
+    const safe = Number.isFinite(number) ? number : fallback;
+    return Math.max(min, Math.min(max, safe));
+}
+
+function getDefaultMemoryPermissions(group = {}) {
+    const legacyCrossChatEnabled = Number(group?.injectLimit) > 0;
+    return {
+        exposeGroupMemoryToPrivate: true,
+        allowPrivateMemoryInGroup: legacyCrossChatEnabled,
+        allowOtherGroupMemoryInGroup: legacyCrossChatEnabled,
+    };
+}
+
+function getDefaultGroupMemory() {
+    return {
+        enabled: true,
+        rawWindowR: DEFAULT_SETTINGS.memoryRawWindowR,
+        thresholdS: DEFAULT_SETTINGS.memoryThresholdS,
+        maxSummaryRounds: DEFAULT_SETTINGS.memorySummaryRounds,
+        summaryResponseLength: DEFAULT_SETTINGS.memorySummaryResponseLength,
+        cursor: 0,
+        rounds: [],
+        lastError: '',
+        updatedAt: 0,
+    };
+}
+
+function normalizeWorldInfoNameList(names) {
+    const source = Array.isArray(names) ? names : [];
+    return [...new Set(source.map(name => String(name || '').trim()).filter(Boolean))];
+}
+
+function getAvailableWorldInfoNames() {
+    return normalizeWorldInfoNameList(world_names);
+}
+
+function isKnownWorldInfoName(name) {
+    const available = getAvailableWorldInfoNames();
+    return available.length === 0 || available.includes(String(name || '').trim());
+}
+
+function normalizeGroupWorldInfo(group) {
+    if (!group || typeof group !== 'object') return;
+    group.worldInfoBooks = normalizeWorldInfoNameList(group.worldInfoBooks);
+    group.includeCharacterWorldInfo = group.includeCharacterWorldInfo !== false;
+}
+
+function getAvailableUserPersonas() {
+    const personas = power_user?.personas && typeof power_user.personas === 'object' ? power_user.personas : {};
+    const descriptions = power_user?.persona_descriptions && typeof power_user.persona_descriptions === 'object'
+        ? power_user.persona_descriptions
+        : {};
+    return Object.entries(personas)
+        .map(([avatar, name]) => ({
+            avatar: String(avatar || '').trim(),
+            name: normalizeText(name) || String(avatar || '').trim(),
+            title: normalizeText(descriptions[avatar]?.title || ''),
+            description: String(descriptions[avatar]?.description || '').trim(),
+        }))
+        .filter(persona => persona.avatar)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+function isKnownUserPersonaAvatar(avatar) {
+    const personas = power_user?.personas && typeof power_user.personas === 'object' ? power_user.personas : {};
+    return !!avatar && hasOwnValue(personas, avatar);
+}
+
+function getDefaultUserPersonaAvatar() {
+    const candidates = [
+        String(user_avatar || '').trim(),
+        String(power_user?.default_persona || '').trim(),
+    ].filter(Boolean);
+    const explicit = candidates.find(isKnownUserPersonaAvatar);
+    if (explicit) return explicit;
+    return getAvailableUserPersonas()[0]?.avatar || '';
+}
+
+function resolveUserPersonaAvatar(avatar) {
+    const value = String(avatar || '').trim();
+    if (isKnownUserPersonaAvatar(value)) return value;
+    return getDefaultUserPersonaAvatar();
+}
+
+function normalizeGroupUserPersona(group) {
+    if (!group || typeof group !== 'object') return '';
+    const legacyAvatar = group.userPersona?.avatar || group.userAvatar || group.personaAvatar || '';
+    const avatar = resolveUserPersonaAvatar(group.userPersonaAvatar || legacyAvatar);
+    group.userPersonaAvatar = avatar || '';
+    return group.userPersonaAvatar;
+}
+
+function normalizeGroupMemory(group) {
+    if (!group || typeof group !== 'object') return null;
+    normalizeGroupUserPersona(group);
+    normalizeGroupWorldInfo(group);
+    const defaults = getDefaultGroupMemory();
+    if (!group.memory || typeof group.memory !== 'object' || Array.isArray(group.memory)) {
+        group.memory = {};
+    }
+    const memory = group.memory;
+    for (const [key, value] of Object.entries(defaults)) {
+        if (!hasOwnValue(memory, key)) memory[key] = value;
+    }
+    memory.enabled = memory.enabled !== false;
+    memory.rawWindowR = clampInteger(memory.rawWindowR, 4, 120, DEFAULT_SETTINGS.memoryRawWindowR);
+    memory.thresholdS = clampInteger(memory.thresholdS, 4, 80, DEFAULT_SETTINGS.memoryThresholdS);
+    memory.maxSummaryRounds = clampInteger(memory.maxSummaryRounds, 1, 6, DEFAULT_SETTINGS.memorySummaryRounds);
+    memory.summaryResponseLength = clampInteger(memory.summaryResponseLength, 400, 3000, DEFAULT_SETTINGS.memorySummaryResponseLength);
+    memory.cursor = clampInteger(memory.cursor, 0, Math.max(0, (group.messages || []).length), 0);
+    memory.lastError = String(memory.lastError || '');
+    memory.updatedAt = Number(memory.updatedAt) || 0;
+    memory.rounds = Array.isArray(memory.rounds)
+        ? memory.rounds
+            .map((round, index) => ({
+                id: String(round?.id || `mem_${index}`),
+                from: Math.max(0, Number(round?.from) || 0),
+                to: Math.max(0, Number(round?.to) || 0),
+                text: normalizeText(round?.text || ''),
+                createdAt: Number(round?.createdAt) || Date.now(),
+            }))
+            .filter(round => round.text)
+        : [];
+
+    const permissionDefaults = getDefaultMemoryPermissions(group);
+    if (!group.memoryPermissions || typeof group.memoryPermissions !== 'object' || Array.isArray(group.memoryPermissions)) {
+        group.memoryPermissions = {};
+    }
+    for (const [key, value] of Object.entries(permissionDefaults)) {
+        if (!hasOwnValue(group.memoryPermissions, key)) group.memoryPermissions[key] = value;
+    }
+    group.memoryPermissions.exposeGroupMemoryToPrivate = group.memoryPermissions.exposeGroupMemoryToPrivate !== false;
+    group.memoryPermissions.allowPrivateMemoryInGroup = !!group.memoryPermissions.allowPrivateMemoryInGroup;
+    group.memoryPermissions.allowOtherGroupMemoryInGroup = !!group.memoryPermissions.allowOtherGroupMemoryInGroup;
+    return group.memory;
+}
+
 function loadLocalState() {
     try {
         const raw = localStorage.getItem(LOCAL_STATE_KEY);
         const data = raw ? JSON.parse(raw) : {};
         state.localGroups = Array.isArray(data.groups) ? data.groups : [];
+        state.localGroups.forEach(normalizeGroupMemory);
         state.activeGroupId = data.activeGroupId || state.localGroups[0]?.id || null;
     } catch (error) {
         console.warn('[ChatPulseGroupLogic] Failed to load local state:', error);
@@ -167,11 +337,15 @@ function saveLocalState() {
 
 function getCurrentGroup() {
     if (!state.activeGroupId) return null;
-    return state.localGroups.find(group => String(group.id) === String(state.activeGroupId)) || null;
+    const group = state.localGroups.find(group => String(group.id) === String(state.activeGroupId)) || null;
+    if (group) normalizeGroupMemory(group);
+    return group;
 }
 
 function getGroupById(groupId) {
-    return state.localGroups.find(group => String(group.id) === String(groupId)) || null;
+    const group = state.localGroups.find(group => String(group.id) === String(groupId)) || null;
+    if (group) normalizeGroupMemory(group);
+    return group;
 }
 
 function getCharacterIndexFromMember(member) {
@@ -201,8 +375,56 @@ function getCharacterAvatarUrl(character) {
     return getThumbnailUrl('avatar', character.avatar);
 }
 
-function getUserAvatarUrl() {
-    return default_avatar;
+function getUserPersonaByAvatar(avatar) {
+    const value = String(avatar || '').trim();
+    const persona = getAvailableUserPersonas().find(item => item.avatar === value);
+    if (persona) return persona;
+    return {
+        avatar: value,
+        name: normalizeText(power_user?.personas?.[value]) || normalizeText(getContext()?.name1) || 'User',
+        title: '',
+        description: value ? String(power_user?.persona_descriptions?.[value]?.description || '').trim() : String(power_user?.persona_description || '').trim(),
+        missing: !!value,
+    };
+}
+
+function getGroupUserPersonaAvatar(group = getCurrentGroup()) {
+    return group ? normalizeGroupUserPersona(group) : getDefaultUserPersonaAvatar();
+}
+
+function getGroupUserPersona(group = getCurrentGroup()) {
+    return getUserPersonaByAvatar(getGroupUserPersonaAvatar(group));
+}
+
+function getGroupUserName(group = getCurrentGroup()) {
+    return getGroupUserPersona(group).name || getUserName();
+}
+
+function getGroupUserEntityId(group = getCurrentGroup()) {
+    const avatar = getGroupUserPersonaAvatar(group);
+    return `user:${avatar || 'default'}`;
+}
+
+function getUserClaimIds(group = getCurrentGroup()) {
+    return [...new Set(['user', getGroupUserEntityId(group)].filter(Boolean))];
+}
+
+function isUserClaimId(value, group = getCurrentGroup()) {
+    return getUserClaimIds(group).includes(String(value || ''));
+}
+
+function getUserMessageName(message = null, group = getCurrentGroup()) {
+    return getMessageSpeaker(message) || getGroupUserName(group);
+}
+
+function getUserMessagePersonaAvatar(message = null, group = getCurrentGroup()) {
+    const avatar = String(message?.userPersonaAvatar || (message?.avatar && message.avatar !== 'user' ? message.avatar : '') || '').trim();
+    return resolveUserPersonaAvatar(avatar || getGroupUserPersonaAvatar(group));
+}
+
+function getUserAvatarUrl(group = getCurrentGroup(), message = null) {
+    const avatar = getUserMessagePersonaAvatar(message, group);
+    return avatar ? getThumbnailUrl('persona', avatar) : default_user_avatar || default_avatar;
 }
 
 function getCharacterIndexByAvatar(avatar) {
@@ -290,7 +512,7 @@ function formatMessageTime(timestamp) {
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function getMessagePreview(message) {
+function getMessagePreview(message, group = getCurrentGroup()) {
     if (!message) return '';
     const packetId = parseRedPacketMessage(message.mes);
     if (packetId) {
@@ -298,7 +520,7 @@ function getMessagePreview(message) {
         return packet ? `红包：${packet.note || packet.senderName || packet.id}` : '红包消息';
     }
     if (message.is_system) return stripTags(message.mes).replace(/^\[System\]\s*/i, '').trim();
-    const speaker = getMessageSpeaker(message) || (message.is_user ? getUserName() : 'Unknown');
+    const speaker = getMessageSpeaker(message) || (message.is_user ? getGroupUserName(group) : 'Unknown');
     return message.is_user ? stripTags(message.mes) : sanitizeLocalReply(message.mes, speaker);
 }
 
@@ -425,7 +647,7 @@ function hasSpeakerPrefixLeak(text, currentCharacterName = '') {
     const memberNames = getGroupCharacters()
         .map(({ character }) => character?.name)
         .filter(Boolean);
-    const knownNames = [...new Set([getUserName(), ...memberNames].filter(Boolean))];
+    const knownNames = [...new Set([getGroupUserName(), ...memberNames].filter(Boolean))];
     const escapedCurrent = String(currentCharacterName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const prefixLines = value.split('\n')
         .map(line => line.trim())
@@ -463,17 +685,19 @@ function buildCharacterCardBlock(character) {
     return parts.length ? parts.join('\n\n') : '';
 }
 
-function buildUserPersonaBlock() {
-    const name = getUserName();
+function buildUserPersonaBlock(group = getCurrentGroup()) {
+    const persona = getGroupUserPersona(group);
+    const name = persona.name || getUserName();
     const personaDescription = [
-        power_user?.persona_description,
-        power_user?.default_persona ? power_user?.persona_descriptions?.[power_user.default_persona]?.description : '',
+        persona.description,
+        !persona.avatar ? power_user?.persona_description : '',
     ]
         .map(value => limitText(value, 1800))
         .find(Boolean);
     return [
         '[当前用户人设]',
         `用户名称：${name}`,
+        persona.avatar ? `绑定人设：${persona.name} (${persona.avatar})` : '',
         personaDescription ? `用户设定：\n${personaDescription}` : '',
     ].filter(Boolean).join('\n');
 }
@@ -485,7 +709,22 @@ function getCharacterWorldNames(character) {
     const avatarBase = String(character?.avatar || '').replace(/\.[^.]+$/, '');
     const extra = world_info?.charLore?.find(item => String(item.name) === avatarBase);
     if (extra && Array.isArray(extra.extraBooks)) names.push(...extra.extraBooks);
-    return [...new Set(names.filter(Boolean))];
+    return normalizeWorldInfoNameList(names).filter(isKnownWorldInfoName);
+}
+
+function getSelectedGroupWorldInfoNames(group) {
+    normalizeGroupWorldInfo(group);
+    return normalizeWorldInfoNameList(group?.worldInfoBooks).filter(isKnownWorldInfoName);
+}
+
+function getGroupWorldInfoSelection(group, character) {
+    const groupNames = getSelectedGroupWorldInfoNames(group);
+    const characterNames = group?.includeCharacterWorldInfo === false ? [] : getCharacterWorldNames(character);
+    return {
+        groupNames,
+        characterNames,
+        worldNames: normalizeWorldInfoNameList([...groupNames, ...characterNames]).filter(isKnownWorldInfoName),
+    };
 }
 
 function worldEntryMatches(entry, searchText) {
@@ -502,12 +741,19 @@ function worldEntryMatches(entry, searchText) {
     return keys.some(key => haystack.includes(key));
 }
 
-async function buildCharacterWorldInfoBlock(character, searchText) {
-    const worldNames = getCharacterWorldNames(character);
+async function buildGroupWorldInfoBlock(group, character, searchText) {
+    const selection = getGroupWorldInfoSelection(group, character);
+    const { worldNames, groupNames } = selection;
     if (!worldNames.length) return '';
     const lines = [];
     for (const worldName of worldNames) {
-        const book = await loadWorldInfo(worldName);
+        let book;
+        try {
+            book = await loadWorldInfo(worldName);
+        } catch (error) {
+            console.warn(`[ChatPulseGroupLogic] Failed to load world info "${worldName}":`, error);
+            continue;
+        }
         const entries = book?.entries ? Object.values(book.entries) : [];
         for (const entry of entries) {
             if (!worldEntryMatches(entry, searchText)) continue;
@@ -519,19 +765,22 @@ async function buildCharacterWorldInfoBlock(character, searchText) {
         if (lines.length >= 12) break;
     }
     if (!lines.length) return '';
+    const hasGroupBooks = groupNames.length > 0;
     return [
-        '[当前角色绑定世界书]',
-        '以下只来自当前发言角色绑定的世界书。把它当作设定背景，不要复述来源标签。',
+        hasGroupBooks ? '[当前群聊/角色世界书]' : '[当前角色绑定世界书]',
+        hasGroupBooks
+            ? '以下来自当前群聊选择的世界书，以及当前发言角色绑定的世界书（如果启用）。把它当作设定背景，不要复述来源标签。'
+            : '以下只来自当前发言角色绑定的世界书。把它当作设定背景，不要复述来源标签。',
         ...lines,
     ].join('\n');
 }
 
-function formatMemoryLine(message, fallbackName = 'Unknown') {
+function formatMemoryLine(message, fallbackName = 'Unknown', group = getCurrentGroup()) {
     if (message?.is_system) {
         const content = stripTags(message.mes).replace(/^\[System\]\s*/i, '').trim();
         return content ? `[System] ${content}` : '';
     }
-    const speaker = getMessageSpeaker(message) || (message.is_user ? getUserName() : fallbackName);
+    const speaker = getMessageSpeaker(message) || (message.is_user ? getGroupUserName(group) : fallbackName);
     const packetId = parseRedPacketMessage(message.mes);
     if (packetId) {
         const packet = getRedPacket(packetId);
@@ -553,14 +802,14 @@ function getLocalGroupMemoryLines(character, currentGroup, limit) {
             .filter(message => message && !message.is_system && normalizeText(message.mes))
             .slice(-limit);
         for (const message of recent) {
-            const line = formatMemoryLine(message, character.name);
+            const line = formatMemoryLine(message, character.name, group);
             if (line) lines.push(`[群:${group.name || group.id}] ${line}`);
         }
     }
     return lines.slice(-limit);
 }
 
-function getCurrentPrivateMemoryLines(character, limit) {
+function getCurrentPrivateMemoryLines(character, limit, group = getCurrentGroup()) {
     if (!character || limit <= 0 || this_chid === null || this_chid === undefined) return [];
     const activeCharacter = characters[this_chid];
     if (!activeCharacter || String(activeCharacter.avatar) !== String(character.avatar)) return [];
@@ -568,7 +817,7 @@ function getCurrentPrivateMemoryLines(character, limit) {
         .filter(message => message && !message.is_system && normalizeText(message.mes))
         .slice(-limit)
         .map(message => {
-            const speaker = message.is_user ? getUserName() : character.name;
+            const speaker = message.is_user ? getMessageSpeaker(message) || getGroupUserName(group) : character.name;
             const content = message.is_user ? stripTags(message.mes) : sanitizeLocalReply(message.mes, character.name);
             if (!content || isOocOrMetaReply(content)) return '';
             return `[私聊:${character.name}] ${speaker}: ${content}`;
@@ -622,9 +871,9 @@ async function fetchPrivateChatFile(character, fileId) {
     return Array.isArray(data) ? data : [];
 }
 
-async function getAllPrivateMemoryLines(character, limit) {
+async function getAllPrivateMemoryLines(character, limit, group = getCurrentGroup()) {
     if (!character || limit <= 0) return [];
-    const cacheKey = `${character.avatar}:${limit}`;
+    const cacheKey = `${character.avatar}:${limit}:${getGroupUserEntityId(group)}`;
     const cached = privateChatMemoryCache.get(cacheKey);
     if (cached && Date.now() - cached.at < PRIVATE_CHAT_CACHE_TTL_MS) return cached.lines;
 
@@ -635,7 +884,7 @@ async function getAllPrivateMemoryLines(character, limit) {
             const messages = await fetchPrivateChatFile(character, file.id);
             for (const message of messages) {
                 if (!message || message.is_system || !normalizeText(message.mes)) continue;
-                const speaker = message.is_user ? getUserName() : character.name;
+                const speaker = message.is_user ? getMessageSpeaker(message) || getGroupUserName(group) : character.name;
                 const content = message.is_user ? stripTags(message.mes) : sanitizeLocalReply(message.mes, character.name);
                 if (!content || isOocOrMetaReply(content)) continue;
                 collected.push({
@@ -648,7 +897,7 @@ async function getAllPrivateMemoryLines(character, limit) {
         console.warn('[ChatPulseGroupLogic] Failed to load private chat memories:', error);
     }
 
-    const currentLines = getCurrentPrivateMemoryLines(character, limit).map((line, index) => ({
+    const currentLines = getCurrentPrivateMemoryLines(character, limit, group).map((line, index) => ({
         at: Date.now() + index,
         line,
     }));
@@ -666,18 +915,403 @@ function clearPrivateMemoryCache() {
     privateChatMemoryCache.clear();
 }
 
-async function buildCrossChatMemoryBlock(character, currentGroup) {
-    const limit = Math.max(0, Math.min(30, Number(currentGroup?.injectLimit) || 0));
-    if (!limit || !character) return '';
-    const lines = [
-        ...await getAllPrivateMemoryLines(character, limit),
-        ...getLocalGroupMemoryLines(character, currentGroup, limit),
-    ].slice(-limit);
-    if (!lines.length) return '';
+function getGroupRawWindowLimit(group) {
+    const memory = normalizeGroupMemory(group);
+    if (memory?.enabled) return memory.rawWindowR;
+    return Math.max(4, Number(group?.contextLimit) || getSettings().contextLimit || DEFAULT_SETTINGS.contextLimit);
+}
+
+function getGroupSummaryRounds(group, maxRounds = null) {
+    const memory = normalizeGroupMemory(group);
+    if (!memory?.enabled || !Array.isArray(memory.rounds)) return [];
+    const limit = Math.max(1, Number(maxRounds ?? memory.maxSummaryRounds) || DEFAULT_SETTINGS.memorySummaryRounds);
+    return memory.rounds
+        .filter(round => normalizeText(round.text))
+        .slice(-limit);
+}
+
+function buildGroupLongMemoryBlock(group) {
+    const memory = normalizeGroupMemory(group);
+    const rounds = getGroupSummaryRounds(group, memory?.maxSummaryRounds);
+    if (!memory?.enabled || rounds.length === 0) return '';
     return [
-        '可参考的私聊/其他群聊记录（只是记忆，不是当前刚发生的新消息，不要逐字复述）：',
-        ...lines,
-    ].join('\n');
+        '[当前群长期记忆]',
+        '这是当前群聊里公开发生过的长期记忆，所有本群成员都可以知道。它不是当前刚发生的新消息，不要逐字复述。',
+        ...rounds.map((round, index) => {
+            const range = `${Number(round.from) + 1}-${Number(round.to)}`;
+            return `摘要${index + 1}（消息 ${range}）：\n${round.text}`;
+        }),
+    ].join('\n\n');
+}
+
+function getGroupMemoryStatus(group) {
+    const memory = normalizeGroupMemory(group);
+    const total = Array.isArray(group?.messages) ? group.messages.length : 0;
+    const rawWindow = getGroupRawWindowLimit(group);
+    const protectedStart = Math.max(0, total - rawWindow);
+    const pending = Math.max(0, protectedStart - (Number(memory?.cursor) || 0));
+    return {
+        total,
+        rawWindow,
+        protectedStart,
+        pending,
+        cursor: Number(memory?.cursor) || 0,
+        threshold: Number(memory?.thresholdS) || DEFAULT_SETTINGS.memoryThresholdS,
+        rounds: Array.isArray(memory?.rounds) ? memory.rounds.length : 0,
+    };
+}
+
+function getSummarizableGroupChunk(group, force = false) {
+    const memory = normalizeGroupMemory(group);
+    if (!group || !memory?.enabled) return null;
+    const messages = Array.isArray(group.messages) ? group.messages : [];
+    const protectedStart = Math.max(0, messages.length - memory.rawWindowR);
+    const from = Math.min(Math.max(0, Number(memory.cursor) || 0), messages.length);
+    const to = Math.max(0, protectedStart);
+    const count = Math.max(0, to - from);
+    if (count <= 0) return null;
+    if (!force && count < memory.thresholdS) return null;
+
+    const lines = messages
+        .slice(from, to)
+        .map((message, offset) => {
+            const line = formatMemoryLine(message);
+            return line ? `${from + offset + 1}. ${line}` : '';
+        })
+        .filter(Boolean);
+    return { from, to, count, lines };
+}
+
+function sanitizeMemorySummary(text) {
+    return limitText(stripTags(text)
+        .replace(/```(?:text|markdown|md)?/gi, '')
+        .replace(/```/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim(), 4000);
+}
+
+async function generateSummaryWithCurrentModel(prompt, memory) {
+    return await generateQuietPromptWithBackoff({
+        quietPrompt: prompt,
+        responseLength: memory.summaryResponseLength,
+        skipWIAN: true,
+        removeReasoning: true,
+        trimToSentence: false,
+    });
+}
+
+async function generateSummaryWithCustomModel(prompt, memory) {
+    const settings = getSettings();
+    const customUrl = normalizeText(settings.summaryCustomUrl);
+    const customModel = normalizeText(settings.summaryCustomModel);
+    if (!customUrl) throw new Error('请先填写长期记忆总结 endpoint。');
+    if (!customModel) throw new Error('请先填写长期记忆总结 model。');
+
+    const delay = getApiDelayForNextCall();
+    if (delay > 0) await wait(delay);
+    const result = await ChatCompletionService.processRequest({
+        stream: false,
+        messages: [
+            {
+                role: 'system',
+                content: '你是 ChatPulse Group Logic 的长期记忆总结器。只输出总结正文，不要寒暄。',
+            },
+            {
+                role: 'user',
+                content: prompt,
+            },
+        ],
+        model: customModel,
+        chat_completion_source: 'custom',
+        custom_url: customUrl,
+        max_tokens: memory.summaryResponseLength,
+        temperature: Number.isFinite(Number(settings.summaryTemperature))
+            ? Math.max(0, Math.min(2, Number(settings.summaryTemperature)))
+            : DEFAULT_SETTINGS.summaryTemperature,
+    }, {}, true);
+    state.apiDelayMs = Math.max(DEFAULT_SETTINGS.apiDelayBaseMs, Math.floor((state.apiDelayMs || DEFAULT_SETTINGS.apiDelayBaseMs) * 0.85));
+    return result?.content || '';
+}
+
+function getSummaryModelOptionsKey() {
+    const settings = getSettings();
+    return normalizeText(settings.summaryCustomUrl);
+}
+
+function extractSummaryModelId(model) {
+    if (typeof model === 'string') return normalizeText(model);
+    if (!model || typeof model !== 'object') return '';
+    return normalizeText(model.id || model.name || model.slug || model.model || model.value);
+}
+
+function extractSummaryModelOptions(data) {
+    const candidates = Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.models)
+            ? data.models
+            : Array.isArray(data)
+                ? data
+                : [];
+    return Array.from(new Set(candidates.map(extractSummaryModelId).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b));
+}
+
+function renderSummaryModelStatus() {
+    const $status = $('#cpgl_summary_model_status');
+    if (!$status.length) return;
+    if (state.summaryModelOptionsLoading) {
+        $status.text('正在读取模型列表...');
+        return;
+    }
+    if (state.summaryModelOptionsError) {
+        $status.text(`模型列表读取失败：${state.summaryModelOptionsError}`);
+        return;
+    }
+    if (state.summaryModelOptions.length) {
+        $status.text(`已加载 ${state.summaryModelOptions.length} 个模型，可点击下拉选择。`);
+        return;
+    }
+    $status.text('点击输入框或箭头读取 Endpoint 的模型列表。');
+}
+
+function closeSummaryModelMenu() {
+    state.summaryModelMenuOpen = false;
+    state.summaryModelFilterActive = false;
+    $('#cpgl_summary_model_menu').hide().empty();
+}
+
+function renderSummaryModelMenu() {
+    const $menu = $('#cpgl_summary_model_menu');
+    if (!$menu.length) return;
+    if (!state.summaryModelMenuOpen) {
+        $menu.hide().empty();
+        return;
+    }
+    const filter = state.summaryModelFilterActive ? normalizeText($('#cpgl_summary_custom_model').val()).toLowerCase() : '';
+    const options = state.summaryModelOptions
+        .filter(model => !filter || model.toLowerCase().includes(filter))
+        .slice(0, 200);
+    if (state.summaryModelOptionsLoading) {
+        $menu.html('<div class="cpgl-summary-model-empty">正在读取模型...</div>').show();
+        return;
+    }
+    if (!options.length) {
+        const text = state.summaryModelOptions.length ? '没有匹配的模型，仍可手动输入。' : '暂无模型列表，仍可手动输入。';
+        $menu.html(`<div class="cpgl-summary-model-empty">${escapeHtml(text)}</div>`).show();
+        return;
+    }
+    const html = options.map(model => `
+        <button type="button" class="cpgl-summary-model-option" data-model="${escapeHtml(model)}">
+            <span>${escapeHtml(model)}</span>
+        </button>
+    `).join('');
+    $menu.html(html).show();
+}
+
+async function loadSummaryCustomModels(force = false) {
+    const settings = getSettings();
+    const customUrl = normalizeText(settings.summaryCustomUrl);
+    if (!customUrl) {
+        state.summaryModelOptionsError = '请先填写 Endpoint。';
+        renderSummaryModelStatus();
+        renderSummaryModelMenu();
+        return [];
+    }
+
+    const key = getSummaryModelOptionsKey();
+    if (!force && state.summaryModelOptionsKey === key && state.summaryModelOptions.length) {
+        state.summaryModelOptionsError = '';
+        renderSummaryModelStatus();
+        renderSummaryModelMenu();
+        return state.summaryModelOptions;
+    }
+
+    state.summaryModelOptionsError = '';
+    renderSummaryModelStatus();
+    renderSummaryModelMenu();
+    if (state.summaryModelOptionsLoading) return state.summaryModelOptions;
+
+    state.summaryModelOptionsLoading = true;
+    renderSummaryModelStatus();
+    renderSummaryModelMenu();
+    try {
+        const response = await fetch('/api/backends/chat-completions/status', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            cache: 'no-cache',
+            body: JSON.stringify({
+                chat_completion_source: 'custom',
+                custom_url: customUrl,
+            }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || data?.error) {
+            throw new Error(data?.message || data?.error?.message || response.statusText || '请求失败');
+        }
+        const models = extractSummaryModelOptions(data);
+        if (!models.length) throw new Error('接口没有返回可用模型。');
+        state.summaryModelOptions = models;
+        state.summaryModelOptionsKey = key;
+        return models;
+    } catch (error) {
+        state.summaryModelOptions = [];
+        state.summaryModelOptionsKey = '';
+        state.summaryModelOptionsError = error?.message || String(error);
+        toastr.warning(state.summaryModelOptionsError, 'ChatPulse Group Logic');
+        return [];
+    } finally {
+        state.summaryModelOptionsLoading = false;
+        renderSummaryModelStatus();
+        renderSummaryModelMenu();
+    }
+}
+
+async function openSummaryModelMenu(force = false) {
+    state.summaryModelMenuOpen = true;
+    state.summaryModelFilterActive = false;
+    renderSummaryModelMenu();
+    await loadSummaryCustomModels(force);
+    $('#cpgl_summary_custom_model').trigger('focus');
+}
+
+async function generateMemorySummaryText(prompt, memory) {
+    const provider = getSettings().summaryProvider === 'custom' ? 'custom' : 'current';
+    try {
+        if (provider === 'custom') return await generateSummaryWithCustomModel(prompt, memory);
+        return await generateSummaryWithCurrentModel(prompt, memory);
+    } catch (error) {
+        if (isRateLimitError(error)) {
+            const settings = getSettings();
+            state.apiDelayMs = Math.min(Number(settings.apiDelayMaxMs) || DEFAULT_SETTINGS.apiDelayMaxMs, Math.max(state.apiDelayMs * 2, DEFAULT_SETTINGS.apiDelayBaseMs * 2));
+            toastr.warning(`总结模型撞到速率限制，下一次请求间隔提高到 ${Math.round(state.apiDelayMs / 1000)} 秒。`, 'ChatPulse Group Logic');
+        }
+        throw error;
+    }
+}
+
+async function summarizeGroupMemory(group, chunk) {
+    const memory = normalizeGroupMemory(group);
+    if (!group || !memory || !chunk) return null;
+    if (!chunk.lines.length) {
+        memory.cursor = chunk.to;
+        memory.lastError = '';
+        memory.updatedAt = Date.now();
+        saveLocalState();
+        renderMemoryPanel();
+        return null;
+    }
+
+    const previous = getGroupSummaryRounds(group, memory.maxSummaryRounds)
+        .map((round, index) => `摘要${index + 1}：\n${round.text}`)
+        .join('\n\n');
+    const prompt = [
+        '你是群聊长期记忆总结器。请只总结公开群聊中已经滑出原文窗口的消息。',
+        `群名：${group.name || group.id}`,
+        previous ? `已有摘要（用于承接，不要照抄）：\n${previous}` : '',
+        `需要总结的原文消息（第 ${chunk.from + 1} 到 ${chunk.to} 条）：`,
+        chunk.lines.join('\n'),
+        '',
+        '请输出中文固定格式，不要 JSON，不要解释规则：',
+        '整体摘要：用 2-4 条保留这段公开群聊发生的事。',
+        '成员关系：记录角色之间、用户与角色之间在群里公开表现出的关系、态度、梗、冲突或亲近。',
+        '重要事实：记录稳定事实、承诺、偏好、红包/事件结果等。',
+        '未完成话题：记录之后可能要继续接上的问题、约定、悬念。',
+        '要求：只写群里公开可知的信息；不要加入私聊秘密；不要把消息编号当作内容。',
+    ].filter(Boolean).join('\n\n');
+
+    const raw = await generateMemorySummaryText(prompt, memory);
+    const summary = sanitizeMemorySummary(raw);
+    if (!summary) throw new Error('长期记忆总结返回为空。');
+
+    memory.rounds.push({
+        id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        from: chunk.from,
+        to: chunk.to,
+        text: summary,
+        createdAt: Date.now(),
+    });
+    memory.cursor = chunk.to;
+    memory.lastError = '';
+    memory.updatedAt = Date.now();
+    saveLocalState();
+    renderMemoryPanel();
+    return summary;
+}
+
+async function ensureGroupMemoryReady(group, { force = false, silent = false } = {}) {
+    const memory = normalizeGroupMemory(group);
+    if (!group || !memory?.enabled) return false;
+    const chunk = getSummarizableGroupChunk(group, force);
+    if (!chunk) {
+        if (force && !silent) toastr.info('没有需要总结的窗口外消息。', 'ChatPulse Group Logic');
+        renderMemoryPanel();
+        return false;
+    }
+    setQueueStage(`正在总结长期记忆：${chunk.count} 条`);
+    try {
+        const summary = await summarizeGroupMemory(group, chunk);
+        if (summary && !silent) toastr.success('长期记忆已更新。', 'ChatPulse Group Logic');
+        return !!summary;
+    } catch (error) {
+        memory.lastError = `长期记忆总结失败：${error?.message || String(error)}`;
+        saveLocalState();
+        renderMemoryPanel();
+        throw new Error(`${memory.lastError}。请重试本轮。`);
+    } finally {
+        setQueueStage('');
+    }
+}
+
+function buildOtherGroupSummaryBlock(character, currentGroup) {
+    if (!character?.avatar) return '';
+    const blocks = [];
+    for (const group of state.localGroups) {
+        if (!group || String(group.id) === String(currentGroup?.id)) continue;
+        normalizeGroupMemory(group);
+        if (!group.memoryPermissions?.allowOtherGroupMemoryInGroup) continue;
+        if (!Array.isArray(group.members) || !group.members.includes(character.avatar)) continue;
+        const rounds = getGroupSummaryRounds(group, group.memory?.maxSummaryRounds);
+        if (!rounds.length) continue;
+        blocks.push([
+            `[其他群长期记忆：${group.name || group.id}]`,
+            ...rounds.map(round => round.text),
+        ].join('\n'));
+    }
+    return blocks.slice(-3).join('\n\n');
+}
+
+async function buildCrossChatMemoryBlock(character, currentGroup) {
+    normalizeGroupMemory(currentGroup);
+    if (!currentGroup || !character) return '';
+    const permissions = currentGroup.memoryPermissions || getDefaultMemoryPermissions(currentGroup);
+    const limit = Math.max(0, Math.min(30, Number(currentGroup.injectLimit) || 0));
+    const sections = [];
+    if (permissions.allowPrivateMemoryInGroup && limit > 0) {
+        const privateLines = await getAllPrivateMemoryLines(character, limit, group);
+        if (privateLines.length) {
+            sections.push([
+                `[当前角色私聊记忆：${character.name}]`,
+                '这是用户与你私下发生过的记忆。除非你在群里自然主动提起，否则不要假装其他群成员已经知道。',
+                ...privateLines.slice(-limit),
+            ].join('\n'));
+        }
+    }
+    if (permissions.allowOtherGroupMemoryInGroup) {
+        const otherGroupSummary = buildOtherGroupSummaryBlock(character, currentGroup);
+        if (otherGroupSummary) sections.push(otherGroupSummary);
+        if (limit > 0) {
+            const otherGroupLines = getLocalGroupMemoryLines(character, currentGroup, limit);
+            if (otherGroupLines.length) {
+                sections.push([
+                    `[当前角色其他群近期原文：${character.name}]`,
+                    '这是其他群聊的背景记忆，不是当前群刚发生的新消息。',
+                    ...otherGroupLines.slice(-limit),
+                ].join('\n'));
+            }
+        }
+    }
+    if (!sections.length) return '';
+    return sections.join('\n\n');
 }
 
 async function buildPrivateBridgePrompt() {
@@ -689,24 +1323,41 @@ async function buildPrivateBridgePrompt() {
     const character = characters[characterId];
     if (!character?.avatar) return '';
 
-    const lines = [];
+    const blocks = [];
     for (const group of state.localGroups) {
+        normalizeGroupMemory(group);
+        if (!group.memoryPermissions?.exposeGroupMemoryToPrivate) continue;
+        if (!Array.isArray(group.members) || !group.members.includes(character.avatar)) continue;
+        const rounds = getGroupSummaryRounds(group, group.memory?.maxSummaryRounds);
+        if (rounds.length) {
+            blocks.push([
+                `[群：${group.name || group.id}]`,
+                ...rounds.map(round => round.text),
+            ].join('\n'));
+            continue;
+        }
         const limit = Math.max(0, Math.min(30, Number(group?.injectLimit) || 0));
-        if (!limit || !Array.isArray(group.members) || !group.members.includes(character.avatar)) continue;
-        const recent = (group.messages || [])
-            .filter(message => message && !message.is_system && normalizeText(message.mes))
-            .slice(-limit);
-        for (const message of recent) {
-            const line = formatMemoryLine(message, character.name);
-            if (line) lines.push(`[${group.name || group.id}] ${line}`);
+        if (limit > 0) {
+            const recent = (group.messages || [])
+                .filter(message => message && !message.is_system && normalizeText(message.mes))
+                .slice(-limit);
+            const lines = recent
+                .map(message => formatMemoryLine(message, character.name))
+                .filter(Boolean);
+            if (lines.length) {
+                blocks.push([
+                    `[群：${group.name || group.id} 近期记录]`,
+                    ...lines,
+                ].join('\n'));
+            }
         }
     }
 
-    if (!lines.length) return '';
+    if (!blocks.length) return '';
     return [
         '[ChatPulse 共享群聊记忆]',
-        `下面是 ${character.name} 参与过的 ChatPulse 独立群聊最近记录。把它当作背景记忆，不要当成用户刚发来的新消息，也不要逐字复述。`,
-        ...lines.slice(-30),
+        `下面是 ${character.name} 参与过、且允许导出到私聊的 ChatPulse 群聊公开记忆。把它当作背景记忆，不要当成用户刚发来的新消息，也不要逐字复述。`,
+        ...blocks.slice(-6),
     ].join('\n');
 }
 
@@ -719,13 +1370,15 @@ function shuffleArray(items) {
     return result;
 }
 
-async function createStGroup(name, memberAvatars) {
+async function createStGroup(name, memberAvatars, userPersonaAvatar = '') {
     const cleanMembers = [...new Set(memberAvatars)].filter(Boolean);
     if (cleanMembers.length === 0) throw new Error('至少选择一个角色。');
+    const selectedUserPersonaAvatar = resolveUserPersonaAvatar(userPersonaAvatar);
     const group = {
         id: `cpgl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         name: normalizeText(name) || `ChatPulse Group: ${cleanMembers.map(avatar => getCharacterByAvatar(avatar)?.name || avatar).join(', ')}`,
         members: cleanMembers,
+        userPersonaAvatar: selectedUserPersonaAvatar,
         avatar_url: getCharacterByAvatar(cleanMembers[0])?.avatar || 'img/ai4.png',
         disabled_members: [],
         messages: [],
@@ -734,6 +1387,10 @@ async function createStGroup(name, memberAvatars) {
         injectLimit: 0,
         contextLimit: getSettings().contextLimit,
         noChain: false,
+        worldInfoBooks: [],
+        includeCharacterWorldInfo: true,
+        memory: getDefaultGroupMemory(),
+        memoryPermissions: getDefaultMemoryPermissions(),
         createdAt: Date.now(),
     };
     state.localGroups.unshift(group);
@@ -966,11 +1623,13 @@ function createCharacterRedPacketMessage(packetData, senderIndex) {
 function createUserRedPacketMessage(packetData) {
     const group = getCurrentGroup();
     if (!group) return null;
+    const userName = getGroupUserName(group);
+    const userPersonaAvatar = getGroupUserPersonaAvatar(group);
     const packet = buildRedPacketPacket({
         group,
         senderIndex: -1,
-        senderAvatar: 'user',
-        senderName: getUserName(),
+        senderAvatar: getGroupUserEntityId(group),
+        senderName: userName,
         mode: packetData.mode,
         total: packetData.total,
         count: packetData.count,
@@ -982,8 +1641,9 @@ function createUserRedPacketMessage(packetData) {
     group.redPackets.push(packet);
     const messageId = appendLocalMessage(group, {
         is_user: true,
-        name: getUserName(),
-        avatar: 'user',
+        name: userName,
+        avatar: userPersonaAvatar || 'user',
+        userPersonaAvatar,
         mes: `[REDPACKET:${packet.id}]`,
     });
     packet.sourceMessageId = messageId;
@@ -1013,8 +1673,13 @@ function claimAmount(packet) {
 function claimRedPacket(packetId, claimer) {
     const packet = getRedPacket(packetId);
     if (!packet || packet.remaining <= 0) return null;
+    if (!Array.isArray(packet.claims)) packet.claims = [];
     const claimerId = claimer.avatar || claimer.id || claimer.name || 'user';
-    if (packet.claims.some(claim => claim.claimerId === claimerId)) return null;
+    const alreadyClaimed = packet.claims.some(claim => (
+        claim.claimerId === claimerId
+        || (isUserClaimId(claimerId) && isUserClaimId(claim.claimerId))
+    ));
+    if (alreadyClaimed) return null;
     const amount = claimAmount(packet);
     if (amount <= 0) return null;
     packet.claims.push({
@@ -1167,19 +1832,27 @@ async function generateForcedMember(characterIndex, instruction = '') {
     const group = getCurrentGroup();
     const character = characters[characterIndex];
     if (!group || !character) return;
+    if (shouldStopQueue()) return { dropped: true, stopped: true };
+    if (consumeQueueSkip(characterIndex)) {
+        finishQueueItem(characterIndex, 'skipped', '已跳过');
+        return { dropped: true, skipped: true };
+    }
     state.orchestrator.currentInstruction = instruction;
     state.typing = [{ id: character.avatar, name: character.name }];
+    markQueueCurrent(characterIndex, `${character.name} 正在回复`);
     renderTypingIndicator();
     try {
-        const history = getRecentVisibleMessages(group.contextLimit || getSettings().contextLimit)
+        const history = getRecentVisibleMessages(getGroupRawWindowLimit(group))
             .map(message => {
                 return formatMemoryLine(message);
             })
             .filter(Boolean)
             .join('\n');
         const characterCard = buildCharacterCardBlock(character);
-        const userPersona = buildUserPersonaBlock();
-        const worldInfoBlock = await buildCharacterWorldInfoBlock(character, `${history}\n${characterCard}\n${userPersona}\n${instruction}`);
+        const userPersona = buildUserPersonaBlock(group);
+        const userName = getGroupUserName(group);
+        const groupLongMemory = buildGroupLongMemoryBlock(group);
+        const worldInfoBlock = await buildGroupWorldInfoBlock(group, character, `${groupLongMemory}\n${history}\n${characterCard}\n${userPersona}\n${instruction}`);
         const crossChatMemory = await buildCrossChatMemoryBlock(character, group);
         const prompt = [
             '你将生成一条群聊消息。',
@@ -1189,14 +1862,15 @@ async function generateForcedMember(characterIndex, instruction = '') {
             characterCard ? `当前角色卡设定：\n${characterCard}` : '',
             userPersona,
             worldInfoBlock,
+            groupLongMemory,
             crossChatMemory,
             getSettings().includeLocalPreset ? `附加约束（不要复述这些字）：${getSettings().localPreset || DEFAULT_SETTINGS.localPreset}` : '',
             instruction ? `发言顺序提示：${instruction}` : '',
             buildRedPacketStatePrompt(),
             `最近聊天：\n${history || '暂无'}`,
             '',
-            `身份边界（最高优先级）：你只能作为 ${character.name} 发言。${getUserName()} 是用户，不是你；其他群成员也不是你。`,
-            `禁止代言：不要替 ${getUserName()} 写任何话、想法、动作或决定；不要替任何其他群成员写台词、反应、心情或行动。`,
+            `身份边界（最高优先级）：你只能作为 ${character.name} 发言。${userName} 是用户，不是你；其他群成员也不是你。`,
+            `禁止代言：不要替 ${userName} 写任何话、想法、动作或决定；不要替任何其他群成员写台词、反应、心情或行动。`,
             `只允许输出 ${character.name} 亲自发到群里的这一条消息。最近聊天只是上下文记录，不是剧本续写模板，不要输出“某某: 内容”的多说话人格式。`,
             `你的输出必须像 ${character.name} 在聊天软件里亲自发送的一条消息。`,
             'If the turn note contains [MENTION], someone just @mentioned you directly. Reply to that message naturally; do not ignore it.',
@@ -1212,6 +1886,10 @@ async function generateForcedMember(characterIndex, instruction = '') {
             trimToSentence: false,
         };
         let raw = await generateQuietPromptWithBackoff(requestOptions);
+        if (shouldStopQueue() || consumeQueueSkip(characterIndex)) {
+            finishQueueItem(characterIndex, 'skipped', '结果已丢弃');
+            return { dropped: true, skipped: true };
+        }
         let redPacketSends = parseRedPacketSends(raw);
         let sanitized = applyLocalRegex(sanitizeLocalReply(raw, character.name));
         let retried = false;
@@ -1219,7 +1897,7 @@ async function generateForcedMember(characterIndex, instruction = '') {
             retried = true;
             const retryPrompt = [
                 `最高优先级身份规则：你只能扮演 ${character.name}。`,
-                `${getUserName()} 是用户，不是你。不要用用户口吻说话，不要替用户写想法、动作或回应。`,
+                `${userName} 是用户，不是你。不要用用户口吻说话，不要替用户写想法、动作或回应。`,
                 '不要替其他群成员写台词、反应、心情、动作或决定。',
                 `角色：${character.name}`,
                 characterCard ? `角色卡：\n${characterCard}` : '',
@@ -1235,6 +1913,10 @@ async function generateForcedMember(characterIndex, instruction = '') {
             });
             redPacketSends = parseRedPacketSends(raw);
             sanitized = applyLocalRegex(sanitizeLocalReply(raw, character.name));
+        }
+        if (shouldStopQueue() || consumeQueueSkip(characterIndex)) {
+            finishQueueItem(characterIndex, 'skipped', '结果已丢弃');
+            return { dropped: true, skipped: true };
         }
         appendDebugLog(group, {
             character: character.name,
@@ -1266,10 +1948,14 @@ async function generateForcedMember(characterIndex, instruction = '') {
         if (dropped && createdPackets.length === 0) {
             toastr.warning(`${character.name} 的输出像 OOC/调试文本，已丢弃。`, 'ChatPulse Group Logic');
         }
+        finishQueueItem(characterIndex, dropped ? 'failed' : 'done', dropped ? '已丢弃' : '完成');
         return {
             dropped,
             packets: createdPackets,
         };
+    } catch (error) {
+        finishQueueItem(characterIndex, 'failed', error?.message || '生成失败');
+        throw error;
     } finally {
         state.orchestrator.currentInstruction = '';
         state.typing = [];
@@ -1335,9 +2021,11 @@ async function processPostRoundMentionQueue(primaryOrder) {
     const processedPostRoundKeys = new Set();
     const maxPostRoundPasses = Math.max(1, Number(settings.maxSecondaryDepth) || DEFAULT_SETTINGS.maxSecondaryDepth) + 1;
     for (let pass = 0; pass < maxPostRoundPasses; pass += 1) {
+        if (shouldStopQueue()) break;
         const postRoundJobs = consumePostRoundMentionJobs(primaryOrder, processedPostRoundKeys);
         if (postRoundJobs.length === 0) break;
         for (const job of postRoundJobs) {
+            if (shouldStopQueue()) break;
             const key = `${job.sourceIndex}:${job.targetIndex}`;
             processedPostRoundKeys.add(key);
             const instruction = [
@@ -1378,9 +2066,12 @@ async function runRedPacketReactionRound(packet) {
     state.orchestrator.postRoundMentions = [];
     state.orchestrator.redPacketEvents = [];
     state.orchestrator.activeRedPacketId = packet.id;
+    beginQueue('redpacket', '红包反应', order, () => '红包反应');
 
     try {
+        await ensureGroupMemoryReady(group, { silent: true });
         for (const characterIndex of order) {
+            if (shouldStopQueue()) break;
             const freshPacket = getRedPacket(packet.id) || packet;
             if (!freshPacket || freshPacket.remaining <= 0) break;
             const instruction = [
@@ -1404,6 +2095,7 @@ async function runRedPacketReactionRound(packet) {
         state.orchestrator.postRoundMentions = [];
         state.orchestrator.activeRedPacketId = null;
         state.orchestrator.redPacketEvents = [];
+        finishQueue(shouldStopQueue() ? '已停止' : '红包反应结束');
         refreshStatus();
     }
 }
@@ -1435,9 +2127,15 @@ async function runMembershipReactionRound(groupId, event) {
     state.orchestrator.postRoundMentions = [];
     state.orchestrator.redPacketEvents = [];
     state.orchestrator.activeRedPacketId = null;
+    beginQueue('membership', event?.type === 'join' ? '成员加入反应' : '成员移出反应', order, (characterIndex) => {
+        const character = characters[characterIndex];
+        return focusAvatars.has(character?.avatar) ? '成员变动本人' : '成员变动反应';
+    });
 
     try {
+        await ensureGroupMemoryReady(group, { silent: true });
         for (const characterIndex of order) {
+            if (shouldStopQueue()) break;
             const character = characters[characterIndex];
             const isFocus = focusAvatars.has(character?.avatar);
             const instruction = event?.type === 'join'
@@ -1468,6 +2166,7 @@ async function runMembershipReactionRound(groupId, event) {
         state.orchestrator.postRoundMentions = [];
         state.orchestrator.activeRedPacketId = null;
         state.orchestrator.redPacketEvents = [];
+        finishQueue(shouldStopQueue() ? '已停止' : '成员变动反应结束');
         refreshStatus();
     }
 }
@@ -1493,23 +2192,29 @@ async function runOrchestratedRound(userText) {
     state.apiDelayMs = Math.max(0, Number(getSettings().apiDelayBaseMs) || DEFAULT_SETTINGS.apiDelayBaseMs);
     state.orchestrator.active = true;
     const reusableUserMessageIndex = findReusableUserMessageIndex(group, text);
+    const userName = getGroupUserName(group);
+    const userPersonaAvatar = getGroupUserPersonaAvatar(group);
     state.orchestrator.currentSourceIndex = reusableUserMessageIndex >= 0
         ? reusableUserMessageIndex
         : appendLocalMessage(group, {
             is_user: true,
-            name: getUserName(),
-            avatar: 'user',
+            name: userName,
+            avatar: userPersonaAvatar || 'user',
+            userPersonaAvatar,
             mes: text,
         });
     if (reusableUserMessageIndex >= 0) renderManagerModal();
     state.orchestrator.postRoundMentions = [];
     state.orchestrator.redPacketEvents = [];
     state.orchestrator.activeRedPacketId = null;
+    beginQueue('round', '群聊轮询', order, (characterIndex) => mentioned.includes(characterIndex) ? '被 @ 点名' : '普通轮询');
 
     try {
+        await ensureGroupMemoryReady(group, { silent: true });
         let activeOrder = [...order];
         let interruptedByRedPacket = false;
         for (let i = 0; i < order.length; i += 1) {
+            if (shouldStopQueue()) break;
             const characterIndex = order[i];
             const packet = state.orchestrator.activeRedPacketId ? getRedPacket(state.orchestrator.activeRedPacketId) : null;
             const userAskedForRedPacket = isRedPacketRequestText(text) && (mentioned.length === 0 || mentioned.includes(characterIndex));
@@ -1535,6 +2240,7 @@ async function runOrchestratedRound(userText) {
         if (interruptedByRedPacket && activeOrder.length > 0) {
             const packet = getRedPacket(state.orchestrator.activeRedPacketId);
             for (const characterIndex of shuffleArray(activeOrder)) {
+                if (shouldStopQueue()) break;
                 const instruction = buildRedPacketReactInstruction(packet);
                 await generateForcedMember(characterIndex, instruction);
                 autoClaimAvailablePackets(characterIndex);
@@ -1545,6 +2251,7 @@ async function runOrchestratedRound(userText) {
         await processPostRoundMentionQueue(order);
 
         for (const packet of state.orchestrator.redPacketEvents) {
+            if (shouldStopQueue()) break;
             if (packet.feedbackDone) continue;
             const senderIndex = getCharacterIndexByAvatar(packet.senderAvatar);
             if (senderIndex < 0) continue;
@@ -1567,6 +2274,7 @@ async function runOrchestratedRound(userText) {
         state.orchestrator.postRoundMentions = [];
         state.orchestrator.activeRedPacketId = null;
         state.orchestrator.redPacketEvents = [];
+        finishQueue(shouldStopQueue() ? '已停止' : '群聊轮询结束');
         refreshStatus();
     }
 }
@@ -1726,6 +2434,141 @@ function clearRuntimeState() {
     state.secondaryDepth = 0;
     state.typing = [];
     renderTypingIndicator();
+}
+
+function resetQueueState() {
+    state.orchestrator.queue = {
+        active: false,
+        stopped: false,
+        skipCurrent: false,
+        type: '',
+        label: '',
+        message: '',
+        currentIndex: -1,
+        currentName: '',
+        startedAt: 0,
+        finishedAt: 0,
+        items: [],
+    };
+}
+
+function beginQueue(type, label, characterIndexes, reasonBuilder = null) {
+    state.orchestrator.queue = {
+        active: true,
+        stopped: false,
+        skipCurrent: false,
+        type,
+        label,
+        message: label,
+        currentIndex: -1,
+        currentName: '',
+        startedAt: Date.now(),
+        finishedAt: 0,
+        items: characterIndexes.map((characterIndex, index) => {
+            const character = characters[characterIndex];
+            return {
+                id: `${character?.avatar || characterIndex}_${index}`,
+                characterIndex,
+                name: character?.name || `#${characterIndex}`,
+                avatar: character?.avatar || '',
+                status: 'pending',
+                reason: typeof reasonBuilder === 'function' ? reasonBuilder(characterIndex, index) : '',
+            };
+        }),
+    };
+    renderQueuePanel();
+}
+
+function getQueueItem(characterIndex) {
+    let item = state.orchestrator.queue.items.find(entry => entry.characterIndex === characterIndex && entry.status !== 'done' && entry.status !== 'skipped');
+    if (!item) {
+        const character = characters[characterIndex];
+        item = {
+            id: `${character?.avatar || characterIndex}_${Date.now()}`,
+            characterIndex,
+            name: character?.name || `#${characterIndex}`,
+            avatar: character?.avatar || '',
+            status: 'pending',
+            reason: '追加回应',
+        };
+        state.orchestrator.queue.items.push(item);
+    }
+    return item;
+}
+
+function setQueueStage(message) {
+    if (!state.orchestrator.queue) resetQueueState();
+    state.orchestrator.queue.message = String(message || state.orchestrator.queue.label || '');
+    renderQueuePanel();
+}
+
+function markQueueCurrent(characterIndex, message = '') {
+    const queue = state.orchestrator.queue;
+    if (!queue?.active) return;
+    const item = getQueueItem(characterIndex);
+    item.status = 'running';
+    item.message = message;
+    queue.currentIndex = characterIndex;
+    queue.currentName = item.name;
+    queue.message = message || `${item.name} 正在回复`;
+    renderQueuePanel();
+}
+
+function finishQueueItem(characterIndex, status = 'done', message = '') {
+    const queue = state.orchestrator.queue;
+    if (!queue?.items) return;
+    const item = queue.items.find(entry => entry.characterIndex === characterIndex && entry.status === 'running')
+        || queue.items.find(entry => entry.characterIndex === characterIndex && entry.status === 'pending')
+        || queue.items.find(entry => entry.characterIndex === characterIndex);
+    if (item) {
+        item.status = status;
+        item.message = message;
+        item.finishedAt = Date.now();
+    }
+    renderQueuePanel();
+}
+
+function finishQueue(message = '本轮结束') {
+    const queue = state.orchestrator.queue;
+    if (!queue) return;
+    queue.active = false;
+    queue.finishedAt = Date.now();
+    queue.currentIndex = -1;
+    queue.currentName = '';
+    queue.message = message;
+    renderQueuePanel();
+}
+
+function shouldStopQueue() {
+    return !!state.orchestrator.queue?.stopped;
+}
+
+function consumeQueueSkip(characterIndex) {
+    const queue = state.orchestrator.queue;
+    if (!queue?.skipCurrent) return false;
+    if (queue.currentIndex >= 0 && queue.currentIndex !== characterIndex) return false;
+    queue.skipCurrent = false;
+    return true;
+}
+
+function requestStopQueue() {
+    const queue = state.orchestrator.queue;
+    if (!queue) return;
+    queue.stopped = true;
+    queue.active = false;
+    queue.message = '正在停止，已发出的请求返回后会丢弃结果';
+    for (const item of queue.items) {
+        if (item.status === 'pending') item.status = 'skipped';
+    }
+    renderQueuePanel();
+}
+
+function requestSkipQueueCurrent() {
+    const queue = state.orchestrator.queue;
+    if (!queue) return;
+    queue.skipCurrent = true;
+    queue.message = queue.currentName ? `准备跳过 ${queue.currentName}` : '准备跳过下一位';
+    renderQueuePanel();
 }
 
 function renderSettings() {
@@ -1910,7 +2753,7 @@ function renderManagerShell() {
     <div id="cpgl_manager_modal" class="cpgl-modal-backdrop" style="display:none;">
         <div class="cpgl-app-shell">
             <nav class="cpgl-sidebar-nav">
-                <button class="cpgl-nav-item active" type="button" title="群聊">群</button>
+                <button id="cpgl_group_list_toggle" class="cpgl-nav-item active" type="button" title="群聊列表">群</button>
                 <button id="cpgl_manager_close" class="cpgl-nav-item" type="button" title="关闭">×</button>
             </nav>
             <aside class="cpgl-middle-column">
@@ -1939,6 +2782,7 @@ function renderManagerShell() {
                             <button id="cpgl_manage_toggle" type="button" title="群管理">⚙</button>
                         </div>
                     </header>
+                    <div id="cpgl_queue_panel" class="cpgl-queue-panel" style="display:none;"></div>
                     <div id="cpgl_chat_messages" class="cpgl-chat-messages"></div>
                     <div id="cpgl_typing_indicator" class="cpgl-typing-indicator" style="display:none;"></div>
                     <div id="cpgl_delete_mode_bar" class="cpgl-delete-mode-bar" style="display:none;"></div>
@@ -1967,6 +2811,11 @@ function renderManagerShell() {
                             <button id="cpgl_rename_group" class="cpgl-icon-btn" type="button" title="修改群名">✎</button>
                         </div>
                     </section>
+                    <section class="cpgl-section">
+                        <h4>User 人设</h4>
+                        <select id="cpgl_group_user_persona_select"></select>
+                        <div id="cpgl_group_user_persona_hint" class="cpgl-hint"></div>
+                    </section>
                     <section id="cpgl_message_delete_section" class="cpgl-section">
                         <h4>选择删除对话</h4>
                         <div class="cpgl-delete-toolbar">
@@ -1985,6 +2834,10 @@ function renderManagerShell() {
                         </div>
                     </section>
                     <section class="cpgl-section">
+                        <h4>运行队列</h4>
+                        <div id="cpgl_queue_drawer" class="cpgl-queue-drawer"></div>
+                    </section>
+                    <section class="cpgl-section">
                         <h4>AI 控制</h4>
                         <label class="cpgl-switch-row">
                             <span>⚡ 禁止AI互相接话</span>
@@ -1993,11 +2846,11 @@ function renderManagerShell() {
                         </label>
                         <div class="cpgl-slider-row">
                             <div>
-                                <span>📥 注入私聊/其他群的消息条数</span>
+                                <span>📥 跨聊原文备用条数</span>
                                 <strong id="cpgl_drawer_inject_value">0</strong>
                             </div>
                             <input id="cpgl_drawer_inject_limit" type="range" min="0" max="30" step="1">
-                            <p>本群消息注入私聊和其他群聊的条数。0 = 关闭注入。</p>
+                            <p>只在权限允许时读取私聊或其他群的近期原文。0 = 只用摘要。</p>
                         </div>
                         <div class="cpgl-slider-row">
                             <div>
@@ -2041,6 +2894,88 @@ function renderManagerShell() {
                         </div>
                     </section>
                     <section class="cpgl-section">
+                        <h4>群聊世界书</h4>
+                        <label class="cpgl-switch-row">
+                            <span>同时读取成员角色卡世界书</span>
+                            <input id="cpgl_include_character_world_info" type="checkbox">
+                            <i></i>
+                        </label>
+                        <div id="cpgl_world_info_status" class="cpgl-hint"></div>
+                        <div id="cpgl_world_info_books" class="cpgl-world-book-list"></div>
+                    </section>
+                    <section class="cpgl-section">
+                        <h4>长期记忆</h4>
+                        <label class="cpgl-switch-row">
+                            <span>启用本群共享摘要</span>
+                            <input id="cpgl_memory_enabled" type="checkbox">
+                            <i></i>
+                        </label>
+                        <div class="cpgl-slider-row">
+                            <div>
+                                <span>R 原文窗口</span>
+                                <strong id="cpgl_memory_r_value">24</strong>
+                            </div>
+                            <input id="cpgl_memory_r" type="range" min="4" max="120" step="1">
+                            <p>最新 R 条消息保留原文，窗口外消息才会被总结。</p>
+                        </div>
+                        <div class="cpgl-slider-row">
+                            <div>
+                                <span>S 触发阈值</span>
+                                <strong id="cpgl_memory_s_value">16</strong>
+                            </div>
+                            <input id="cpgl_memory_s" type="range" min="4" max="80" step="1">
+                            <p>窗口外未摘要消息达到 S 条时，回复前先总结；失败则中止本轮。</p>
+                        </div>
+                        <div class="cpgl-row">
+                            <label for="cpgl_summary_provider">总结模型</label>
+                            <select id="cpgl_summary_provider">
+                                <option value="current">当前模型</option>
+                                <option value="custom">自定义小模型</option>
+                            </select>
+                        </div>
+                        <div id="cpgl_summary_custom_fields" class="cpgl-summary-custom">
+                            <label>
+                                <span>Endpoint</span>
+                                <input id="cpgl_summary_custom_url" type="text" placeholder="https://api.example.com/v1">
+                            </label>
+                            <label>
+                                <span>Model</span>
+                                <div id="cpgl_summary_model_combo" class="cpgl-summary-model-combo">
+                                    <input id="cpgl_summary_custom_model" type="text" placeholder="gpt-4o-mini / qwen-turbo / local-model" autocomplete="off">
+                                    <button id="cpgl_summary_model_toggle" type="button" title="读取模型列表" aria-label="读取模型列表">⌄</button>
+                                    <div id="cpgl_summary_model_menu" class="cpgl-summary-model-menu"></div>
+                                </div>
+                                <small id="cpgl_summary_model_status" class="cpgl-summary-model-status"></small>
+                            </label>
+                            <label>
+                                <span>Temperature</span>
+                                <input id="cpgl_summary_temperature" type="number" min="0" max="2" step="0.1">
+                            </label>
+                            <p class="cpgl-hint">自定义小模型走 SillyTavern 的 Custom OpenAI-compatible 后端，API Key 使用 ST 全局 Custom API Key。</p>
+                        </div>
+                        <label class="cpgl-switch-row">
+                            <span>私聊可读取本群摘要</span>
+                            <input id="cpgl_expose_group_memory_private" type="checkbox">
+                            <i></i>
+                        </label>
+                        <label class="cpgl-switch-row">
+                            <span>本群可读取角色私聊记忆</span>
+                            <input id="cpgl_allow_private_memory_group" type="checkbox">
+                            <i></i>
+                        </label>
+                        <label class="cpgl-switch-row">
+                            <span>本群可读取角色其他群摘要</span>
+                            <input id="cpgl_allow_other_group_memory" type="checkbox">
+                            <i></i>
+                        </label>
+                        <div id="cpgl_memory_status" class="cpgl-hint"></div>
+                        <div class="cpgl-row">
+                            <button id="cpgl_summarize_now" type="button" class="menu_button">立即总结</button>
+                            <button id="cpgl_clear_memory" type="button" class="cpgl-danger-outline">清空摘要</button>
+                        </div>
+                        <div id="cpgl_memory_summaries" class="cpgl-memory-summaries"></div>
+                    </section>
+                    <section class="cpgl-section">
                         <h4>独立预设 / 正则</h4>
                         <textarea id="cpgl_local_preset" rows="6" placeholder="导入或编辑这个弹窗专用的群聊预设"></textarea>
                         <label class="cpgl-switch-row">
@@ -2079,6 +3014,10 @@ function renderManagerShell() {
                 </div>
                 <div class="cpgl-create-body">
                     <input id="cpgl_new_group_name" type="text" placeholder="群聊名称">
+                    <label class="cpgl-create-field">
+                        <span>User 人设</span>
+                        <select id="cpgl_new_user_persona"></select>
+                    </label>
                     <div class="cpgl-search-shell">
                         <span>⌕</span>
                         <input id="cpgl_create_search" type="text" placeholder="搜索角色...">
@@ -2329,6 +3268,14 @@ function bindManagerLiveEvents() {
     $(document)
         .off('.cpglManagerLive')
         .on('click.cpglManagerLive', '#cpgl_manager_close', () => $('#cpgl_manager_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_group_list_toggle', event => {
+            event.preventDefault();
+            const modal = $('#cpgl_manager_modal');
+            const isCompactModal = modal.hasClass('cpgl-touch-modal') || !!window.matchMedia?.('(max-width: 620px)')?.matches;
+            if (isCompactModal) {
+                modal.toggleClass('cpgl-show-group-list');
+            }
+        })
         .on('click.cpglManagerLive', '#cpgl_show_create, #cpgl_mobile_create_group, #cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'))
         .on('click.cpglManagerLive', '#cpgl_header_delete_messages', () => {
             if (!getCurrentGroup()) {
@@ -2373,6 +3320,9 @@ function bindManagerLiveEvents() {
             if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
         })
         .on('input.cpglManagerLive', '#cpgl_create_search', renderManagerModal)
+        .on('change.cpglManagerLive', '#cpgl_new_user_persona', event => {
+            state.createUserPersonaAvatar = String(event.target.value || '');
+        })
         .on('change.cpglManagerLive', '#cpgl_create_members input[type="checkbox"]', event => {
             if (event.target.checked) {
                 state.createMemberAvatars.add(event.target.value);
@@ -2436,6 +3386,14 @@ function bindManagerLiveEvents() {
         .on('keydown.cpglManagerLive', '#cpgl_group_name_input', event => {
             if (event.key === 'Enter') $('#cpgl_rename_group').trigger('click');
         })
+        .on('change.cpglManagerLive', '#cpgl_group_user_persona_select', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            group.userPersonaAvatar = resolveUserPersonaAvatar(event.target.value);
+            saveLocalState();
+            renderManagerModal();
+            refreshStatus();
+        })
         .on('change.cpglManagerLive', '#cpgl_drawer_no_chain', event => {
             const group = getCurrentGroup();
             if (!group) return;
@@ -2459,6 +3417,103 @@ function bindManagerLiveEvents() {
             saveLocalState();
             refreshStatus();
         })
+        .on('change.cpglManagerLive', '#cpgl_memory_enabled', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupMemory(group).enabled = event.target.checked;
+            saveLocalState();
+            renderMemoryPanel();
+        })
+        .on('input.cpglManagerLive', '#cpgl_memory_r', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            const memory = normalizeGroupMemory(group);
+            memory.rawWindowR = clampInteger(event.target.value, 4, 120, DEFAULT_SETTINGS.memoryRawWindowR);
+            $('#cpgl_memory_r_value').text(memory.rawWindowR);
+            saveLocalState();
+            renderMemoryPanel();
+        })
+        .on('input.cpglManagerLive', '#cpgl_memory_s', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            const memory = normalizeGroupMemory(group);
+            memory.thresholdS = clampInteger(event.target.value, 4, 80, DEFAULT_SETTINGS.memoryThresholdS);
+            $('#cpgl_memory_s_value').text(memory.thresholdS);
+            saveLocalState();
+            renderMemoryPanel();
+        })
+        .on('change.cpglManagerLive', '#cpgl_summary_provider', event => {
+            getSettings().summaryProvider = event.target.value === 'custom' ? 'custom' : 'current';
+            saveSettings();
+            renderMemoryPanel();
+        })
+        .on('input.cpglManagerLive', '#cpgl_summary_custom_url', event => {
+            getSettings().summaryCustomUrl = String(event.target.value || '').trim();
+            state.summaryModelOptions = [];
+            state.summaryModelOptionsKey = '';
+            state.summaryModelOptionsError = '';
+            saveSettings();
+            renderSummaryModelStatus();
+            renderSummaryModelMenu();
+        })
+        .on('input.cpglManagerLive', '#cpgl_summary_custom_model', event => {
+            state.summaryModelFilterActive = true;
+            getSettings().summaryCustomModel = String(event.target.value || '').trim();
+            saveSettings();
+            renderSummaryModelMenu();
+        })
+        .on('click.cpglManagerLive', '#cpgl_summary_custom_model', async () => {
+            if (getSettings().summaryProvider !== 'custom') return;
+            await openSummaryModelMenu(false);
+        })
+        .on('keydown.cpglManagerLive', '#cpgl_summary_custom_model', async event => {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                await openSummaryModelMenu(false);
+            }
+            if (event.key === 'Escape') closeSummaryModelMenu();
+        })
+        .on('click.cpglManagerLive', '#cpgl_summary_model_toggle', async event => {
+            event.preventDefault();
+            await openSummaryModelMenu(true);
+        })
+        .on('mousedown.cpglManagerLive', '#cpgl_summary_model_menu .cpgl-summary-model-option', event => {
+            event.preventDefault();
+            const model = event.currentTarget.dataset.model || '';
+            getSettings().summaryCustomModel = model;
+            $('#cpgl_summary_custom_model').val(model);
+            saveSettings();
+            closeSummaryModelMenu();
+        })
+        .on('input.cpglManagerLive', '#cpgl_summary_temperature', event => {
+            const value = Number(event.target.value);
+            getSettings().summaryTemperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : DEFAULT_SETTINGS.summaryTemperature;
+            saveSettings();
+        })
+        .on('change.cpglManagerLive', '#cpgl_expose_group_memory_private', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupMemory(group);
+            group.memoryPermissions.exposeGroupMemoryToPrivate = event.target.checked;
+            saveLocalState();
+            renderMemoryPanel();
+        })
+        .on('change.cpglManagerLive', '#cpgl_allow_private_memory_group', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupMemory(group);
+            group.memoryPermissions.allowPrivateMemoryInGroup = event.target.checked;
+            saveLocalState();
+            renderMemoryPanel();
+        })
+        .on('change.cpglManagerLive', '#cpgl_allow_other_group_memory', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupMemory(group);
+            group.memoryPermissions.allowOtherGroupMemoryInGroup = event.target.checked;
+            saveLocalState();
+            renderMemoryPanel();
+        })
         .on('input.cpglManagerLive', '#cpgl_api_base_delay', event => {
             getSettings().apiDelayBaseMs = Math.max(0, Number(event.target.value) || 0);
             $('#cpgl_api_base_value').text(formatSeconds(getSettings().apiDelayBaseMs));
@@ -2478,6 +3533,22 @@ function bindManagerLiveEvents() {
             getSettings().responseLength = Math.max(500, Math.min(6000, Number(event.target.value) || DEFAULT_SETTINGS.responseLength));
             $('#cpgl_response_length_value').text(getSettings().responseLength);
             saveSettings();
+        })
+        .on('change.cpglManagerLive', '#cpgl_include_character_world_info', event => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupWorldInfo(group);
+            group.includeCharacterWorldInfo = event.target.checked;
+            saveLocalState();
+            renderWorldInfoPanel();
+        })
+        .on('change.cpglManagerLive', '#cpgl_world_info_books input[type="checkbox"]', () => {
+            const group = getCurrentGroup();
+            if (!group) return;
+            normalizeGroupWorldInfo(group);
+            group.worldInfoBooks = normalizeWorldInfoNameList($('#cpgl_world_info_books input[type="checkbox"]:checked').map((_, input) => input.value).get());
+            saveLocalState();
+            renderWorldInfoPanel();
         })
         .on('input.cpglManagerLive', '#cpgl_local_preset', event => {
             getSettings().localPreset = String(event.target.value || '');
@@ -2510,9 +3581,42 @@ function bindManagerLiveEvents() {
             toastr.success('已导入弹窗专用预设/正则。', 'ChatPulse Group Logic');
             event.target.value = '';
         })
+        .on('click.cpglManagerLive', '#cpgl_summarize_now', async () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            beginQueue('memory', '手动长期记忆总结', [], () => '总结');
+            try {
+                await ensureGroupMemoryReady(group, { force: true });
+                finishQueue('长期记忆总结完成');
+            } catch (error) {
+                finishQueue('长期记忆总结失败');
+                toastr.error(error.message || String(error), 'ChatPulse Group Logic');
+            }
+        })
+        .on('click.cpglManagerLive', '#cpgl_clear_memory', () => {
+            const group = getCurrentGroup();
+            if (!group) {
+                toastr.warning('请先进入一个群聊。');
+                return;
+            }
+            const confirmed = window.confirm(`确定清空「${group.name || '当前群聊'}」的长期摘要吗？原始消息不会删除。`);
+            if (!confirmed) return;
+            const memory = normalizeGroupMemory(group);
+            memory.cursor = 0;
+            memory.rounds = [];
+            memory.lastError = '';
+            memory.updatedAt = 0;
+            saveLocalState();
+            renderMemoryPanel();
+            toastr.success('长期摘要已清空。', 'ChatPulse Group Logic');
+        })
         .on('click.cpglManagerLive', '#cpgl_clear_queue_danger', () => {
             state.pendingMentionJobs = [];
             state.orchestrator.postRoundMentions = [];
+            requestStopQueue();
             toastr.info('队列已清空。', 'ChatPulse Group Logic');
         })
         .on('click.cpglManagerLive', '#cpgl_clear_messages_danger', () => {
@@ -2526,6 +3630,7 @@ function bindManagerLiveEvents() {
             group.messages = [];
             group.redPackets = [];
             group.debugLogs = [];
+            group.memory = getDefaultGroupMemory();
             clearRuntimeState();
             saveLocalState();
             renderManagerModal();
@@ -2572,8 +3677,17 @@ function bindManagerLiveEvents() {
         .on('click.cpglManagerLive', '#cpgl_interrupt_generation', () => {
             state.typing = [];
             state.pendingMentionJobs = [];
+            requestStopQueue();
             renderTypingIndicator();
-            toastr.info('已打断弹窗内队列。', 'ChatPulse Group Logic');
+            toastr.info('已请求停止弹窗内队列。', 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_queue_stop', () => {
+            requestStopQueue();
+            toastr.info('已请求停止当前队列。', 'ChatPulse Group Logic');
+        })
+        .on('click.cpglManagerLive', '#cpgl_queue_skip', () => {
+            requestSkipQueueCurrent();
+            toastr.info('当前角色结果返回后会被跳过。', 'ChatPulse Group Logic');
         })
         .on('click.cpglManagerLive', '#cpgl_manager_modal', event => {
             if (event.target.id === 'cpgl_manager_modal') $('#cpgl_manager_modal').hide();
@@ -2581,7 +3695,8 @@ function bindManagerLiveEvents() {
         .on('click.cpglManagerLive', '#cpgl_create_group', async () => {
             try {
                 const avatars = [...state.createMemberAvatars];
-                await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars);
+                const userPersonaAvatar = String($('#cpgl_new_user_persona').val() || state.createUserPersonaAvatar || '');
+                await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars, userPersonaAvatar);
                 $('#cpgl_new_group_name').val('');
                 $('#cpgl_create_search').val('');
                 state.createMemberAvatars.clear();
@@ -2651,12 +3766,14 @@ function bindManagerLiveEvents() {
             }
         })
         .on('click.cpglManagerLive', '#cpgl_red_packet_list .cpgl-claim-packet', event => {
-            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
+            const group = getCurrentGroup();
+            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: getGroupUserEntityId(group), name: getGroupUserName(group) });
             if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
         })
         .on('click.cpglManagerLive', '#cpgl_chat_messages .cpgl-claim-packet', event => {
             event.stopPropagation();
-            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: 'user', name: getUserName() });
+            const group = getCurrentGroup();
+            const result = claimRedPacket(event.currentTarget.dataset.packetId, { avatar: getGroupUserEntityId(group), name: getGroupUserName(group) });
             if (result) toastr.success(`抢到 ${result.amount.toFixed(2)}`, 'ChatPulse Group Logic');
         })
         .on('click.cpglManagerLive', '#cpgl_entry_send', () => {
@@ -2701,6 +3818,9 @@ function bindManagerLiveEvents() {
                 $('#cpgl_entry_send').trigger('click');
             }
         })
+        .on('click.cpglManagerLive', event => {
+            if (!$(event.target).closest('#cpgl_summary_model_combo').length) closeSummaryModelMenu();
+        })
         .on('mousedown.cpglManagerLive', '#cpgl_mention_menu .cpgl-mention-item', event => {
             event.preventDefault();
             chooseMention(Number(event.currentTarget.dataset.index) || 0);
@@ -2734,7 +3854,7 @@ function renderChatMessages() {
     }
 
     $('#cpgl_chat_title').text(group.name || group.id);
-    $('#cpgl_chat_subtitle').text(`${(group.members || []).length} 个成员 | 无 @ 随机轮询，@角色 点名优先`);
+    $('#cpgl_chat_subtitle').text(`${(group.members || []).length} 个成员 | User: ${getGroupUserName(group)} | 无 @ 随机轮询，@角色 点名优先`);
     const rows = getRecentVisibleMessages(80).map(message => {
         const messageId = getLocalMessageId(message, message._index);
         const selected = state.selectedMessageIds.has(messageId);
@@ -2747,9 +3867,9 @@ function renderChatMessages() {
                 </div>` : '';
         }
         const isUser = !!message.is_user;
-        const speaker = isUser ? getUserName() : getMessageSpeaker(message) || 'Unknown';
+        const speaker = isUser ? getUserMessageName(message, group) : getMessageSpeaker(message) || 'Unknown';
         const character = isUser ? null : characters.find(item => item.name === speaker);
-        const avatarUrl = isUser ? getUserAvatarUrl() : getCharacterAvatarUrl(character);
+        const avatarUrl = isUser ? getUserAvatarUrl(group, message) : getCharacterAvatarUrl(character);
         const packetId = parseRedPacketMessage(message.mes);
         const packet = packetId ? getRedPacket(packetId) : null;
         const content = isUser ? stripTags(message.mes) : sanitizeLocalReply(message.mes, speaker);
@@ -2779,7 +3899,7 @@ function renderChatMessages() {
 function renderRedPacketCard(packet, isUser = false) {
     const claims = Array.isArray(packet.claims) ? packet.claims : [];
     const claimed = packet.count - packet.remaining;
-    const userClaimed = claims.some(claim => claim.claimerId === 'user');
+    const userClaimed = claims.some(claim => isUserClaimId(claim.claimerId));
     const isExpired = packet.remaining <= 0;
     const claimRows = claims.map(claim => `
         <div class="cpgl-redpacket-claim-row">
@@ -2787,7 +3907,7 @@ function renderRedPacketCard(packet, isUser = false) {
             <strong>¥${Number(claim.amount || 0).toFixed(2)}</strong>
         </div>
     `).join('');
-    const canClaim = !isExpired && !userClaimed && !isUser;
+    const canClaim = !isExpired && !userClaimed && !isUser && !isUserClaimId(packet.senderAvatar);
     return `
         <div class="cpgl-redpacket-message-card" data-packet-id="${escapeHtml(packet.id)}">
             <div class="cpgl-redpacket-message-main">
@@ -2821,9 +3941,9 @@ function renderMessageDeleteList() {
         const speaker = message.is_system
             ? 'System'
             : message.is_user
-                ? getUserName()
+                ? getUserMessageName(message, group)
                 : getMessageSpeaker(message) || 'Unknown';
-        const preview = limitText(getMessagePreview(message), 120) || '空消息';
+        const preview = limitText(getMessagePreview(message, group), 120) || '空消息';
         const type = parseRedPacketMessage(message.mes) ? '红包' : message.is_system ? '系统' : message.is_user ? '用户' : '角色';
         return `
             <label class="cpgl-delete-message-row">
@@ -2836,6 +3956,100 @@ function renderMessageDeleteList() {
     }).join('');
     $('#cpgl_message_delete_list').html(rows);
     $('#cpgl_delete_selected_messages').prop('disabled', true).text('删除选中');
+}
+
+function renderMemoryPanel() {
+    if (!$('#cpgl_memory_status').length) return;
+    const group = getCurrentGroup();
+    if (!group) {
+        $('#cpgl_memory_status').text('当前没有打开群聊。');
+        $('#cpgl_memory_summaries').html('');
+        return;
+    }
+    const memory = normalizeGroupMemory(group);
+    const status = getGroupMemoryStatus(group);
+    $('#cpgl_memory_enabled').prop('checked', !!memory.enabled);
+    $('#cpgl_memory_r').val(memory.rawWindowR);
+    $('#cpgl_memory_r_value').text(memory.rawWindowR);
+    $('#cpgl_memory_s').val(memory.thresholdS);
+    $('#cpgl_memory_s_value').text(memory.thresholdS);
+    const settings = getSettings();
+    const summaryProvider = settings.summaryProvider === 'custom' ? 'custom' : 'current';
+    $('#cpgl_summary_provider').val(summaryProvider);
+    $('#cpgl_summary_custom_fields').toggle(summaryProvider === 'custom');
+    $('#cpgl_summary_custom_url').val(settings.summaryCustomUrl || '');
+    $('#cpgl_summary_custom_model').val(settings.summaryCustomModel || '');
+    $('#cpgl_summary_temperature').val(Number.isFinite(Number(settings.summaryTemperature)) ? Number(settings.summaryTemperature) : DEFAULT_SETTINGS.summaryTemperature);
+    if (summaryProvider !== 'custom') closeSummaryModelMenu();
+    renderSummaryModelStatus();
+    renderSummaryModelMenu();
+    $('#cpgl_expose_group_memory_private').prop('checked', !!group.memoryPermissions.exposeGroupMemoryToPrivate);
+    $('#cpgl_allow_private_memory_group').prop('checked', !!group.memoryPermissions.allowPrivateMemoryInGroup);
+    $('#cpgl_allow_other_group_memory').prop('checked', !!group.memoryPermissions.allowOtherGroupMemoryInGroup);
+    $('#cpgl_memory_status').text([
+        memory.enabled ? '已启用' : '已关闭',
+        `已总结到第 ${status.cursor} 条`,
+        `当前 ${status.total} 条`,
+        `窗口外未摘要 ${status.pending}/${status.threshold} 条`,
+        `摘要 ${status.rounds} 轮`,
+        memory.lastError ? `上次错误：${memory.lastError}` : '',
+    ].filter(Boolean).join(' | '));
+
+    const rounds = getGroupSummaryRounds(group, Math.max(6, memory.maxSummaryRounds));
+    const html = rounds.slice().reverse().map(round => `
+        <details class="cpgl-memory-item">
+            <summary>消息 ${Number(round.from) + 1}-${Number(round.to)} · ${escapeHtml(formatMessageTime(round.createdAt))}</summary>
+            <pre>${escapeHtml(round.text)}</pre>
+        </details>
+    `).join('');
+    $('#cpgl_memory_summaries').html(html || '<div class="cpgl-hint">还没有长期摘要。</div>');
+}
+
+function renderQueuePanel() {
+    const queue = state.orchestrator.queue;
+    if (!$('#cpgl_queue_panel').length && !$('#cpgl_queue_drawer').length) return;
+    const items = Array.isArray(queue?.items) ? queue.items : [];
+    const doneCount = items.filter(item => ['done', 'skipped', 'failed'].includes(item.status)).length;
+    const active = !!queue?.active || items.length > 0;
+    const statusLabel = queue?.active
+        ? `${doneCount}/${items.length || 0}`
+        : items.length ? '已结束' : '空闲';
+    const rows = items.map(item => {
+        const mark = item.status === 'done' ? '✓'
+            : item.status === 'running' ? '▶'
+                : item.status === 'failed' ? '!'
+                    : item.status === 'skipped' ? '↷'
+                        : '·';
+        return `
+            <div class="cpgl-queue-row ${escapeHtml(item.status || 'pending')}">
+                <span>${mark}</span>
+                <div>
+                    <strong>${escapeHtml(item.name || 'Unknown')}</strong>
+                    <small>${escapeHtml(item.reason || item.message || '')}</small>
+                </div>
+            </div>`;
+    }).join('');
+    const controls = queue?.active ? `
+        <div class="cpgl-queue-actions">
+            <button id="cpgl_queue_skip" type="button">跳过</button>
+            <button id="cpgl_queue_stop" type="button" class="danger">停止</button>
+        </div>` : '';
+    const body = `
+        <div class="cpgl-queue-head">
+            <div>
+                <strong>${escapeHtml(queue?.label || '运行队列')}</strong>
+                <span>${escapeHtml(statusLabel)} · ${escapeHtml(queue?.message || '空闲')}</span>
+            </div>
+            ${controls}
+        </div>
+        <div class="cpgl-queue-list">${rows || '<div class="cpgl-hint">当前没有运行中的队列。</div>'}</div>
+    `;
+    $('#cpgl_queue_drawer').html(body);
+    if (queue?.active) {
+        $('#cpgl_queue_panel').html(body).css('display', 'block');
+    } else {
+        $('#cpgl_queue_panel').hide().empty();
+    }
 }
 
 function renderTypingIndicator() {
@@ -2859,12 +4073,13 @@ function openGroupCenter() {
     loadLocalState();
     renderManagerModal();
     syncVisibleViewportModal();
-    $('#cpgl_manager_modal').css('display', 'flex');
+    $('#cpgl_manager_modal').removeClass('cpgl-show-group-list').css('display', 'flex');
     recordCpglDebug('openGroupCenter.done');
 }
 
 async function openGroupConversation(groupId) {
     await openManagedGroup(groupId);
+    $('#cpgl_manager_modal').removeClass('cpgl-show-group-list');
     renderManagerModal();
 }
 
@@ -2992,22 +4207,48 @@ function syncVisibleViewportModal() {
     });
 }
 
+function userPersonaOptionsHtml(selectedAvatar = '') {
+    const personas = getAvailableUserPersonas();
+    const selected = resolveUserPersonaAvatar(selectedAvatar);
+    if (!personas.length) {
+        return '<option value="">ST 当前用户</option>';
+    }
+    return personas.map(persona => {
+        const title = persona.title ? ` · ${persona.title}` : '';
+        return `<option value="${escapeHtml(persona.avatar)}" ${persona.avatar === selected ? 'selected' : ''}>${escapeHtml(persona.name)}${escapeHtml(title)}</option>`;
+    }).join('');
+}
+
+function renderUserPersonaSelect(selector, selectedAvatar = '') {
+    const $select = $(selector);
+    if (!$select.length) return resolveUserPersonaAvatar(selectedAvatar);
+    const selected = resolveUserPersonaAvatar(selectedAvatar);
+    $select.html(userPersonaOptionsHtml(selected));
+    $select.val(selected);
+    return String($select.val() || selected || '');
+}
+
 function renderManagerModal() {
     if (!$('#cpgl_manager_modal').length) return;
     const createSearch = String($('#cpgl_create_search').val() || '').toLowerCase();
     const createCandidates = characters.filter(character => (character.name || character.avatar || '').toLowerCase().includes(createSearch));
     $('#cpgl_create_members').html(createCandidates.map(character => characterOptionHtml(character, state.createMemberAvatars.has(character.avatar))).join(''));
+    state.createUserPersonaAvatar = renderUserPersonaSelect(
+        '#cpgl_new_user_persona',
+        String($('#cpgl_new_user_persona').val() || state.createUserPersonaAvatar || getDefaultUserPersonaAvatar()),
+    );
 
     const groupRows = state.localGroups.map(group => {
         const firstMember = getCharacterByAvatar((group.members || [])[0]);
         const names = (group.members || []).map(avatar => getCharacterByAvatar(avatar)?.name || avatar).join('、');
         const isActive = getCurrentGroup()?.id === group.id;
+        const userName = getGroupUserName(group);
         return `
             <button class="cpgl-chat-list-item cpgl-open-group ${isActive ? 'active' : ''}" type="button" data-group-id="${escapeHtml(group.id)}">
                 <img src="${escapeHtml(getCharacterAvatarUrl(firstMember))}" alt="">
                 <div>
                     <strong>${escapeHtml(group.name || group.id)}</strong>
-                    <span>${escapeHtml(names || '无成员')}</span>
+                    <span>${escapeHtml(`User: ${userName} | ${names || '无成员'}`)}</span>
                 </div>
             </button>`;
     }).join('');
@@ -3018,15 +4259,28 @@ function renderManagerModal() {
         $('#cpgl_current_members').html('<div class="cpgl-hint">当前没有打开群聊。</div>');
         $('#cpgl_add_member_select').html('');
         $('#cpgl_group_name_input').val('');
+        $('#cpgl_group_user_persona_select').html('');
+        $('#cpgl_group_user_persona_hint').text('当前没有打开群聊。');
         $('#cpgl_member_count').text('(0)');
         renderRedPacketList();
         renderChatMessages();
         renderDebugLogs();
         renderMessageDeleteList();
         renderDeleteModeBar();
+        renderWorldInfoPanel();
+        renderMemoryPanel();
+        renderQueuePanel();
         return;
     }
     $('#cpgl_group_name_input').val(group.name || '');
+    const groupPersonaAvatar = renderUserPersonaSelect('#cpgl_group_user_persona_select', group.userPersonaAvatar);
+    group.userPersonaAvatar = groupPersonaAvatar;
+    const groupPersona = getGroupUserPersona(group);
+    $('#cpgl_group_user_persona_hint').text(
+        groupPersona.avatar
+            ? `本群用户消息、红包和提示词会使用「${groupPersona.name}」。`
+            : '没有可用 persona 时，会回退到 ST 当前用户。',
+    );
     $('#cpgl_member_count').text(`(${(group.members || []).length})`);
     $('#cpgl_drawer_no_chain').prop('checked', !!group.noChain);
     $('#cpgl_drawer_inject_limit').val(Number(group.injectLimit) || 0);
@@ -3069,6 +4323,9 @@ function renderManagerModal() {
     renderDebugLogs();
     renderMessageDeleteList();
     renderDeleteModeBar();
+    renderWorldInfoPanel();
+    renderMemoryPanel();
+    renderQueuePanel();
 }
 
 function updatePacketPreview() {
@@ -3088,8 +4345,11 @@ function renderRedPacketList() {
     if (!$('#cpgl_red_packet_list').length) return;
     const packets = getRedPacketsForCurrentGroup().slice().reverse();
     const html = packets.map(packet => {
-        const claims = packet.claims.map(claim => `${claim.claimerName} ${claim.amount.toFixed(2)}`).join('、') || '暂无领取';
-        const canUserClaim = packet.remaining > 0 && !packet.claims.some(claim => claim.claimerId === 'user');
+        const claimsList = Array.isArray(packet.claims) ? packet.claims : [];
+        const claims = claimsList.map(claim => `${claim.claimerName} ${claim.amount.toFixed(2)}`).join('、') || '暂无领取';
+        const canUserClaim = packet.remaining > 0
+            && !isUserClaimId(packet.senderAvatar)
+            && !claimsList.some(claim => isUserClaimId(claim.claimerId));
         return `
             <div class="cpgl-list-row cpgl-redpacket-row">
                 <div>
@@ -3118,6 +4378,44 @@ function renderDebugLogs() {
         </details>
     `).join('');
     $('#cpgl_debug_logs').html(html || '<div class="cpgl-hint">还没有新的输入输出记录。之后每次生成都会记录。</div>');
+}
+
+function renderWorldInfoPanel() {
+    if (!$('#cpgl_world_info_books').length) return;
+    const group = getCurrentGroup();
+    if (!group) {
+        $('#cpgl_include_character_world_info').prop('checked', true);
+        $('#cpgl_world_info_status').text('当前没有打开群聊。');
+        $('#cpgl_world_info_books').html('');
+        return;
+    }
+
+    normalizeGroupWorldInfo(group);
+    const availableNames = getAvailableWorldInfoNames();
+    const availableSet = new Set(availableNames);
+    const selectedNames = normalizeWorldInfoNameList(group.worldInfoBooks);
+    const selectedSet = new Set(selectedNames);
+    const activeSelectedNames = availableNames.length
+        ? selectedNames.filter(name => availableSet.has(name))
+        : selectedNames;
+    const missingNames = availableNames.length
+        ? selectedNames.filter(name => !availableSet.has(name))
+        : [];
+
+    $('#cpgl_include_character_world_info').prop('checked', group.includeCharacterWorldInfo !== false);
+    const rows = availableNames.map(name => `
+        <label class="cpgl-world-book-row">
+            <input type="checkbox" value="${escapeHtml(name)}" ${selectedSet.has(name) ? 'checked' : ''}>
+            <span>${escapeHtml(name)}</span>
+        </label>
+    `).join('');
+    $('#cpgl_world_info_books').html(rows || '<div class="cpgl-hint">没有可用世界书。</div>');
+
+    const modeText = group.includeCharacterWorldInfo === false ? '只读上面选中的世界书' : '会叠加成员角色卡世界书';
+    const missingText = missingNames.length
+        ? `；已忽略 ${missingNames.length} 个不存在的选择：${missingNames.slice(0, 3).join('、')}${missingNames.length > 3 ? '…' : ''}`
+        : '';
+    $('#cpgl_world_info_status').text(`已选择 ${activeSelectedNames.length} 个群聊世界书，${modeText}${missingText}。`);
 }
 
 function deleteSelectedMessagesFromGroup(group, selectedIds) {
@@ -3232,6 +4530,7 @@ function refreshStatus() {
 
 function initializeFrontend(reason = 'unknown') {
     if (!document.body) return;
+    loadLocalState();
     renderSettings();
     renderOrchestratedEntry();
     renderManagerShell();
@@ -3258,6 +4557,8 @@ function registerEvents() {
         clearRuntimeState();
         setTimeout(refreshStatus, 250);
     });
+    eventSource.on(event_types.WORLDINFO_UPDATED, renderWorldInfoPanel);
+    eventSource.on(event_types.WORLDINFO_SETTINGS_UPDATED, renderWorldInfoPanel);
     eventSource.on(event_types.APP_READY, () => initializeFrontend('APP_READY'));
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => initializeFrontend('DOMContentLoaded'), { once: true });
