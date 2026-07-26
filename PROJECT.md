@@ -6,7 +6,7 @@ ChatPulse Group Logic 是一个 SillyTavern 第三方前端扩展。它在 ST �
 
 - 不创建 SillyTavern 原生群聊。
 - 不依赖 ChatPulse 后端、数据库或向量记忆。
-- 群聊列表、消息、红包、摘要和调试记录都保存在浏览器 localStorage。
+- 群聊列表、消息、红包和摘要保存在浏览器 localStorage；完整 Prompt、输出和错误诊断只保留在当前页面会话。
 - 每个群聊可以绑定一个明确存在的 SillyTavern user persona。
 - 每个群聊可以选择不同角色成员，因此可以同时维护多个独立群。
 
@@ -18,17 +18,18 @@ ChatPulse Group Logic 是一个 SillyTavern 第三方前端扩展。它在 ST �
 - `bootstrap.js`：轻量调试/启动辅助。
 - `server-plugin/chatpulse_group_logic_debug/index.js`：可选服务端调试插件。
 - `README.md`：安装和基础使用。
+- `USER_GUIDE.md`：面向初次使用者的完整操作、按钮和排错说明。
 - `API.md`：接口、数据结构和 ST API 边界。
 
 ## 运行流程
 
-1. 扩展加载后注入 ChatPulse 群聊入口。
-2. 用户打开群聊中心。
-3. 创建群聊时选择群名、user persona 和角色成员。
+1. 扩展加载后注入 ChatPulse 群聊入口；没有本地群聊的新用户会自动进入可恢复的新手引导。
+2. 引导通过高亮和箭头要求用户真实点击入口、创建按钮和管理按钮。
+3. 创建群聊时选择群名、user persona 和角色成员，未完成的建群内容保存为引导草稿。
 4. 用户在群聊窗口发送消息。
 5. 扩展把消息写入本群 localStorage，并根据 `@` 内容决定角色回复顺序。
 6. 每个角色回复前，扩展构造包含角色卡、群历史、user persona、世界书和长期记忆的提示词。
-7. 扩展调用 SillyTavern `generateQuietPrompt` 生成该角色的一条群消息。
+7. 扩展调用 SillyTavern `generateRaw`，只发送显式构造的 system/user 消息，生成该角色的一条群消息。
 8. 输出经过清理、正则和红包标签解析后写回当前群。
 
 ## 多群聊与 user 绑定
@@ -52,6 +53,10 @@ state.localGroups[]
 
 因此可以创建多个群，并让不同群使用不同 user persona 和不同角色组合。
 
+同一个群的 `members` 可以来自不同的 SillyTavern 角色卡。电脑端会常驻显示群列表；手机端从聊天页左上角返回全屏群列表。创建新群不会删除或覆盖旧群。
+
+跨私聊或跨群共享记忆时，user persona 也是身份边界：只有源端和目标端都有明确且相同的 persona，并且对应权限已开启，记忆才会注入。缺少 persona 元数据时一律不共享。
+
 ## 世界书策略
 
 世界书不是必填项。
@@ -68,6 +73,9 @@ state.localGroups[]
 - Raw Output
 - Sanitized
 - 是否重试
+- 失败原因
+
+这些内容只保存在当前页面会话，刷新后自动清除，不会随群聊正文写入 localStorage。
 
 如果发送后完全没有反应，先确认：
 
@@ -75,4 +83,3 @@ state.localGroups[]
 - 当前群是否至少有一个角色成员。
 - 队列面板是否显示正在等待 API 间隔或速率退避。
 - 浏览器控制台或可选服务端调试插件是否有错误。
-

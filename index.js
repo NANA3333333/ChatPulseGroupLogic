@@ -1,4 +1,4 @@
-import { chat, characters, default_avatar, default_user_avatar, event_types, eventSource, generateQuietPrompt, getRequestHeaders, getThumbnailUrl, this_chid } from '../../../../script.js';
+import { chat, chat_metadata, characters, default_avatar, default_user_avatar, event_types, eventSource, generateRaw, getRequestHeaders, getThumbnailUrl, this_chid } from '../../../../script.js';
 import { ChatCompletionService } from '../../../../scripts/custom-request.js';
 import { is_group_generating } from '../../../../scripts/group-chats.js';
 import { user_avatar } from '../../../../scripts/personas.js';
@@ -6,9 +6,11 @@ import { power_user } from '../../../../scripts/power-user.js';
 import { loadWorldInfo, world_info, world_names } from '../../../../scripts/world-info.js';
 
 const MODULE_NAME = 'ChatPulseGroupLogic';
-const MODULE_VERSION = '0.1.22';
+const MODULE_VERSION = '0.3.0';
 const METADATA_KEY = 'chatpulse_group_logic';
 const LOCAL_STATE_KEY = 'chatpulse_group_logic.local_groups.v1';
+const ONBOARDING_STATE_KEY = 'chatpulse_group_logic.onboarding.v1';
+const ONBOARDING_VERSION = 1;
 const DEBUG_ENDPOINT = '/api/plugins/chatpulse_group_logic_debug/log';
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -52,6 +54,7 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 const PRIVATE_CHAT_CACHE_TTL_MS = 45_000;
 const privateChatMemoryCache = new Map();
+const DEFAULT_CROSS_CHAT_RAW_LIMIT = 12;
 const QUICK_EMOJIS = Object.freeze([
     '\u{1F600}', '\u{1F601}', '\u{1F602}', '\u{1F923}', '\u{1F979}',
     '\u{1F60A}', '\u{1F642}', '\u{1F609}', '\u{1F60D}', '\u{1F618}',
@@ -106,6 +109,7 @@ const state = {
     },
     deleteMode: false,
     selectedMessageIds: new Set(),
+    debugLogsByGroup: new Map(),
     apiDelayMs: 2500,
     generationCounter: 0,
     debugTapCounter: 0,
@@ -118,6 +122,17 @@ const state = {
     summaryModelOptionsError: '',
     summaryModelMenuOpen: false,
     summaryModelFilterActive: false,
+    helpPreviousFocus: null,
+    onboarding: {
+        active: false,
+        stepId: '',
+        createdGroupId: '',
+        autoPrompted: false,
+        previousFocus: null,
+        positionFrame: 0,
+        hostReadyTimer: 0,
+        fallbackRecord: null,
+    },
 };
 
 function getContext() {
@@ -271,6 +286,9 @@ function normalizeGroupUserPersona(group) {
 
 function normalizeGroupMemory(group) {
     if (!group || typeof group !== 'object') return null;
+    // Prompts may contain private-memory excerpts. Debug records are session-only;
+    // remove any copies written by older versions from persisted group data.
+    if (hasOwnValue(group, 'debugLogs')) delete group.debugLogs;
     normalizeGroupUserPersona(group);
     normalizeGroupWorldInfo(group);
     const defaults = getDefaultGroupMemory();
@@ -319,8 +337,17 @@ function loadLocalState() {
         const raw = localStorage.getItem(LOCAL_STATE_KEY);
         const data = raw ? JSON.parse(raw) : {};
         state.localGroups = Array.isArray(data.groups) ? data.groups : [];
+        const hadPersistedDebugLogs = state.localGroups.some(group => hasOwnValue(group || {}, 'debugLogs'));
+        const hadPersistedMemoryErrors = state.localGroups.some(group => hasOwnValue(group?.memory || {}, 'lastError'));
         state.localGroups.forEach(normalizeGroupMemory);
-        state.activeGroupId = data.activeGroupId || state.localGroups[0]?.id || null;
+        state.localGroups.forEach(group => {
+            if (group?.memory) group.memory.lastError = '';
+        });
+        const requestedGroupId = data.activeGroupId;
+        state.activeGroupId = state.localGroups.some(group => String(group?.id) === String(requestedGroupId))
+            ? requestedGroupId
+            : state.localGroups[0]?.id || null;
+        if (hadPersistedDebugLogs || hadPersistedMemoryErrors) saveLocalState();
     } catch (error) {
         console.warn('[ChatPulseGroupLogic] Failed to load local state:', error);
         state.localGroups = [];
@@ -330,9 +357,121 @@ function loadLocalState() {
 
 function saveLocalState() {
     localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify({
-        groups: state.localGroups,
+        groups: state.localGroups.map(group => {
+            const persistedGroup = { ...group };
+            if (group?.memory && typeof group.memory === 'object' && !Array.isArray(group.memory)) {
+                persistedGroup.memory = { ...group.memory };
+                delete persistedGroup.memory.lastError;
+            }
+            return persistedGroup;
+        }),
         activeGroupId: state.activeGroupId,
     }));
+}
+
+function createDefaultOnboardingRecord() {
+    return {
+        version: ONBOARDING_VERSION,
+        status: 'new',
+        stepId: 'welcome',
+        createdGroupId: '',
+        draft: {
+            name: '',
+            personaAvatar: '',
+            memberAvatars: [],
+        },
+        updatedAt: Date.now(),
+    };
+}
+
+function normalizeOnboardingRecord(record) {
+    const source = record && typeof record === 'object' ? record : {};
+    if (Number(source.version) !== ONBOARDING_VERSION) return createDefaultOnboardingRecord();
+    const validStatuses = new Set(['new', 'active', 'paused', 'completed', 'skipped', 'existing-user']);
+    const validSteps = new Set([
+        'welcome',
+        'entry',
+        'create',
+        'name',
+        'persona',
+        'members',
+        'confirm',
+        'composer',
+        'quick-tools',
+        'delete-messages',
+        'manage',
+        'manager-overview',
+        'help',
+    ]);
+    const draft = source.draft && typeof source.draft === 'object' ? source.draft : {};
+    return {
+        version: ONBOARDING_VERSION,
+        status: validStatuses.has(source.status) ? source.status : 'new',
+        stepId: validSteps.has(source.stepId) ? source.stepId : 'welcome',
+        createdGroupId: String(source.createdGroupId || ''),
+        draft: {
+            name: String(draft.name || ''),
+            personaAvatar: String(draft.personaAvatar || ''),
+            memberAvatars: Array.isArray(draft.memberAvatars)
+                ? [...new Set(draft.memberAvatars.map(value => String(value || '')).filter(Boolean))]
+                : [],
+        },
+        updatedAt: Number(source.updatedAt) || Date.now(),
+    };
+}
+
+function readOnboardingRecord() {
+    try {
+        const raw = localStorage.getItem(ONBOARDING_STATE_KEY);
+        if (!raw) return normalizeOnboardingRecord(state.onboarding.fallbackRecord);
+        const record = normalizeOnboardingRecord(JSON.parse(raw));
+        state.onboarding.fallbackRecord = record;
+        return record;
+    } catch (error) {
+        console.warn('[ChatPulseGroupLogic] Failed to read onboarding state:', error);
+        return normalizeOnboardingRecord(state.onboarding.fallbackRecord);
+    }
+}
+
+function writeOnboardingRecord(patch = {}) {
+    const current = readOnboardingRecord();
+    const next = normalizeOnboardingRecord({
+        ...current,
+        ...patch,
+        draft: patch.draft ? { ...current.draft, ...patch.draft } : current.draft,
+        version: ONBOARDING_VERSION,
+        updatedAt: Date.now(),
+    });
+    state.onboarding.fallbackRecord = next;
+    try {
+        localStorage.setItem(ONBOARDING_STATE_KEY, JSON.stringify(next));
+    } catch (error) {
+        console.warn('[ChatPulseGroupLogic] Failed to save onboarding state:', error);
+    }
+    return next;
+}
+
+function saveOnboardingDraft() {
+    if (!state.onboarding.active) return;
+    writeOnboardingRecord({
+        status: 'active',
+        stepId: state.onboarding.stepId,
+        createdGroupId: state.onboarding.createdGroupId,
+        draft: {
+            name: String($('#cpgl_new_group_name').val() || ''),
+            personaAvatar: String($('#cpgl_new_user_persona').val() || state.createUserPersonaAvatar || ''),
+            memberAvatars: [...state.createMemberAvatars],
+        },
+    });
+}
+
+function restoreOnboardingDraft() {
+    const record = readOnboardingRecord();
+    if (!record.draft) return;
+    const knownCharacterAvatars = new Set(characters.map(character => String(character?.avatar || '')).filter(Boolean));
+    state.createMemberAvatars = new Set(record.draft.memberAvatars.filter(avatar => knownCharacterAvatars.has(avatar)));
+    state.createUserPersonaAvatar = resolveUserPersonaAvatar(record.draft.personaAvatar || getDefaultUserPersonaAvatar());
+    $('#cpgl_new_group_name').val(record.draft.name || '');
 }
 
 function getCurrentGroup() {
@@ -403,6 +542,24 @@ function getGroupUserName(group = getCurrentGroup()) {
 function getGroupUserEntityId(group = getCurrentGroup()) {
     const avatar = getGroupUserPersonaAvatar(group);
     return `user:${avatar || 'default'}`;
+}
+
+function getCurrentPrivatePersonaAvatar() {
+    const lockedAvatar = String(chat_metadata?.persona || '').trim();
+    return isKnownUserPersonaAvatar(lockedAvatar) ? lockedAvatar : '';
+}
+
+function hasSameUserPersona(leftGroup, rightGroup) {
+    const leftAvatar = String(getGroupUserPersonaAvatar(leftGroup) || '');
+    const rightAvatar = String(getGroupUserPersonaAvatar(rightGroup) || '');
+    return !!leftAvatar && leftAvatar === rightAvatar;
+}
+
+function privateChatHeaderMatchesGroupPersona(header, group) {
+    const expectedAvatar = getGroupUserPersonaAvatar(group);
+    const lockedAvatar = String(header?.chat_metadata?.persona || '').trim();
+    if (!lockedAvatar) return false;
+    return String(lockedAvatar) === String(expectedAvatar || '');
 }
 
 function getUserClaimIds(group = getCurrentGroup()) {
@@ -526,14 +683,14 @@ function getMessagePreview(message, group = getCurrentGroup()) {
 
 function appendDebugLog(group, log) {
     if (!group) return;
-    if (!Array.isArray(group.debugLogs)) group.debugLogs = [];
-    group.debugLogs.push({
+    const groupId = String(group.id || '');
+    const logs = state.debugLogsByGroup.get(groupId) || [];
+    logs.push({
         id: `dbg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         at: Date.now(),
         ...log,
     });
-    group.debugLogs = group.debugLogs.slice(-12);
-    saveLocalState();
+    state.debugLogsByGroup.set(groupId, logs.slice(-12));
     renderDebugLogs();
 }
 
@@ -668,6 +825,7 @@ function limitText(value, maxLength = 6000) {
 
 function buildCharacterCardBlock(character) {
     const data = character?.data || {};
+    const depthPrompt = data?.extensions?.depth_prompt;
     const parts = [
         ['角色名', character?.name],
         ['角色描述', character?.description || data.description],
@@ -675,6 +833,9 @@ function buildCharacterCardBlock(character) {
         ['场景', character?.scenario || data.scenario],
         ['开场白', character?.first_mes || data.first_mes],
         ['示例对话', character?.mes_example || data.mes_example],
+        ['角色系统提示', character?.system_prompt || data.system_prompt],
+        ['历史后置指令', character?.post_history_instructions || data.post_history_instructions],
+        ['角色深度提示', depthPrompt?.prompt],
         ['创作者备注', data.creator_notes || character?.creatorcomment],
     ]
         .map(([label, value]) => {
@@ -700,6 +861,16 @@ function buildUserPersonaBlock(group = getCurrentGroup()) {
         persona.avatar ? `绑定人设：${persona.name} (${persona.avatar})` : '',
         personaDescription ? `用户设定：\n${personaDescription}` : '',
     ].filter(Boolean).join('\n');
+}
+
+function applyLocalPromptMacros(value, character, group = getCurrentGroup()) {
+    const characterName = normalizeText(character?.name) || 'Character';
+    const userName = getGroupUserName(group);
+    return String(value || '')
+        .replace(/\{\{\s*char\s*\}\}/gi, characterName)
+        .replace(/\{\{\s*user\s*\}\}/gi, userName)
+        .replace(/<\s*char\s*>/gi, characterName)
+        .replace(/<\s*user\s*>/gi, userName);
 }
 
 function getCharacterWorldNames(character) {
@@ -791,12 +962,24 @@ function formatMemoryLine(message, fallbackName = 'Unknown', group = getCurrentG
     return `${speaker}: ${content}`;
 }
 
+function getGroupActivityAt(group) {
+    const messages = Array.isArray(group?.messages) ? group.messages : [];
+    const lastMessageAt = getMessageTimestamp(messages[messages.length - 1]);
+    return Math.max(
+        Number(lastMessageAt) || 0,
+        Number(group?.memory?.updatedAt) || 0,
+        Number(group?.createdAt) || 0,
+    );
+}
+
 function getLocalGroupMemoryLines(character, currentGroup, limit) {
     const targetAvatar = character?.avatar;
     if (!targetAvatar || limit <= 0) return [];
     const lines = [];
-    for (const group of state.localGroups) {
+    const groupsByActivity = [...state.localGroups].sort((left, right) => getGroupActivityAt(left) - getGroupActivityAt(right));
+    for (const group of groupsByActivity) {
         if (!group || String(group.id) === String(currentGroup?.id)) continue;
+        if (!hasSameUserPersona(group, currentGroup)) continue;
         if (!Array.isArray(group.members) || !group.members.includes(targetAvatar)) continue;
         const recent = (group.messages || [])
             .filter(message => message && !message.is_system && normalizeText(message.mes))
@@ -811,6 +994,9 @@ function getLocalGroupMemoryLines(character, currentGroup, limit) {
 
 function getCurrentPrivateMemoryLines(character, limit, group = getCurrentGroup()) {
     if (!character || limit <= 0 || this_chid === null || this_chid === undefined) return [];
+    const currentPersonaAvatar = getCurrentPrivatePersonaAvatar();
+    if (!currentPersonaAvatar) return [];
+    if (String(currentPersonaAvatar) !== String(getGroupUserPersonaAvatar(group) || '')) return [];
     const activeCharacter = characters[this_chid];
     if (!activeCharacter || String(activeCharacter.avatar) !== String(character.avatar)) return [];
     return (Array.isArray(chat) ? chat : [])
@@ -860,15 +1046,18 @@ async function fetchPrivateChatFiles(character) {
 }
 
 async function fetchPrivateChatFile(character, fileId) {
-    if (!character?.avatar || !fileId) return [];
+    if (!character?.avatar || !fileId) return { header: {}, messages: [] };
     const response = await fetch('/api/chats/get', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({ avatar_url: character.avatar, file_name: fileId }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { header: {}, messages: [] };
     const data = await response.json();
-    return Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) return { header: {}, messages: [] };
+    const header = data.find(item => item?.chat_metadata || item?.user_name || item?.character_name) || {};
+    const messages = data.filter(item => item && !item.chat_metadata && (hasOwnValue(item, 'mes') || hasOwnValue(item, 'is_user')));
+    return { header, messages };
 }
 
 async function getAllPrivateMemoryLines(character, limit, group = getCurrentGroup()) {
@@ -881,10 +1070,11 @@ async function getAllPrivateMemoryLines(character, limit, group = getCurrentGrou
     try {
         const files = await fetchPrivateChatFiles(character);
         for (const file of files) {
-            const messages = await fetchPrivateChatFile(character, file.id);
+            const { header, messages } = await fetchPrivateChatFile(character, file.id);
+            if (!privateChatHeaderMatchesGroupPersona(header, group)) continue;
             for (const message of messages) {
                 if (!message || message.is_system || !normalizeText(message.mes)) continue;
-                const speaker = message.is_user ? getMessageSpeaker(message) || getGroupUserName(group) : character.name;
+                const speaker = message.is_user ? getMessageSpeaker(message) || normalizeText(header?.user_name) || getGroupUserName(group) : character.name;
                 const content = message.is_user ? stripTags(message.mes) : sanitizeLocalReply(message.mes, character.name);
                 if (!content || isOocOrMetaReply(content)) continue;
                 collected.push({
@@ -901,11 +1091,18 @@ async function getAllPrivateMemoryLines(character, limit, group = getCurrentGrou
         at: Date.now() + index,
         line,
     }));
-    const lines = [...collected, ...currentLines]
+    const chronological = [...collected, ...currentLines]
         .sort((a, b) => a.at - b.at)
-        .map(item => item.line)
-        .filter((line, index, array) => array.indexOf(line) === index)
-        .slice(-limit);
+        .map(item => item.line);
+    const seen = new Set();
+    const lines = [];
+    for (let index = chronological.length - 1; index >= 0 && lines.length < limit; index -= 1) {
+        const line = chronological[index];
+        const semanticKey = line.replace(/^\[私聊:[^\]]+\]\s*/, '');
+        if (seen.has(semanticKey)) continue;
+        seen.add(semanticKey);
+        lines.unshift(line);
+    }
 
     privateChatMemoryCache.set(cacheKey, { at: Date.now(), lines });
     return lines;
@@ -916,8 +1113,6 @@ function clearPrivateMemoryCache() {
 }
 
 function getGroupRawWindowLimit(group) {
-    const memory = normalizeGroupMemory(group);
-    if (memory?.enabled) return memory.rawWindowR;
     return Math.max(4, Number(group?.contextLimit) || getSettings().contextLimit || DEFAULT_SETTINGS.contextLimit);
 }
 
@@ -991,12 +1186,19 @@ function sanitizeMemorySummary(text) {
 }
 
 async function generateSummaryWithCurrentModel(prompt, memory) {
-    return await generateQuietPromptWithBackoff({
-        quietPrompt: prompt,
+    return await generateRawWithBackoff({
+        prompt: [
+            {
+                role: 'system',
+                content: '你是 ChatPulse Group Logic 的长期记忆总结器。只依据下面明确提供的群聊记录总结，只输出总结正文，不要寒暄。',
+            },
+            {
+                role: 'user',
+                content: prompt,
+            },
+        ],
         responseLength: memory.summaryResponseLength,
-        skipWIAN: true,
-        removeReasoning: true,
-        trimToSentence: false,
+        trimNames: false,
     });
 }
 
@@ -1253,7 +1455,7 @@ async function ensureGroupMemoryReady(group, { force = false, silent = false } =
         if (summary && !silent) toastr.success('长期记忆已更新。', 'ChatPulse Group Logic');
         return !!summary;
     } catch (error) {
-        memory.lastError = `长期记忆总结失败：${error?.message || String(error)}`;
+        memory.lastError = `长期记忆总结失败：${sanitizeDebugError(error)}`;
         saveLocalState();
         renderMemoryPanel();
         throw new Error(`${memory.lastError}。请重试本轮。`);
@@ -1265,10 +1467,11 @@ async function ensureGroupMemoryReady(group, { force = false, silent = false } =
 function buildOtherGroupSummaryBlock(character, currentGroup) {
     if (!character?.avatar) return '';
     const blocks = [];
-    for (const group of state.localGroups) {
+    const groupsByActivity = [...state.localGroups].sort((left, right) => getGroupActivityAt(left) - getGroupActivityAt(right));
+    for (const group of groupsByActivity) {
         if (!group || String(group.id) === String(currentGroup?.id)) continue;
         normalizeGroupMemory(group);
-        if (!group.memoryPermissions?.allowOtherGroupMemoryInGroup) continue;
+        if (!hasSameUserPersona(group, currentGroup)) continue;
         if (!Array.isArray(group.members) || !group.members.includes(character.avatar)) continue;
         const rounds = getGroupSummaryRounds(group, group.memory?.maxSummaryRounds);
         if (!rounds.length) continue;
@@ -1287,7 +1490,7 @@ async function buildCrossChatMemoryBlock(character, currentGroup) {
     const limit = Math.max(0, Math.min(30, Number(currentGroup.injectLimit) || 0));
     const sections = [];
     if (permissions.allowPrivateMemoryInGroup && limit > 0) {
-        const privateLines = await getAllPrivateMemoryLines(character, limit, group);
+        const privateLines = await getAllPrivateMemoryLines(character, limit, currentGroup);
         if (privateLines.length) {
             sections.push([
                 `[当前角色私聊记忆：${character.name}]`,
@@ -1315,6 +1518,7 @@ async function buildCrossChatMemoryBlock(character, currentGroup) {
 }
 
 async function buildPrivateBridgePrompt() {
+    if (!getSettings().enabled) return '';
     if (state.orchestrator.active) return '';
     const ctx = getContext();
     if (ctx.groupId) return '';
@@ -1322,11 +1526,15 @@ async function buildPrivateBridgePrompt() {
     if (characterId === null || characterId === undefined || characterId < 0) return '';
     const character = characters[characterId];
     if (!character?.avatar) return '';
+    const currentPersonaAvatar = getCurrentPrivatePersonaAvatar();
+    if (!currentPersonaAvatar) return '';
 
     const blocks = [];
-    for (const group of state.localGroups) {
+    const groupsByActivity = [...state.localGroups].sort((left, right) => getGroupActivityAt(left) - getGroupActivityAt(right));
+    for (const group of groupsByActivity) {
         normalizeGroupMemory(group);
         if (!group.memoryPermissions?.exposeGroupMemoryToPrivate) continue;
+        if (String(getGroupUserPersonaAvatar(group) || '') !== String(currentPersonaAvatar || '')) continue;
         if (!Array.isArray(group.members) || !group.members.includes(character.avatar)) continue;
         const rounds = getGroupSummaryRounds(group, group.memory?.maxSummaryRounds);
         if (rounds.length) {
@@ -1334,12 +1542,12 @@ async function buildPrivateBridgePrompt() {
                 `[群：${group.name || group.id}]`,
                 ...rounds.map(round => round.text),
             ].join('\n'));
-            continue;
         }
         const limit = Math.max(0, Math.min(30, Number(group?.injectLimit) || 0));
         if (limit > 0) {
+            const cursor = Math.max(0, Number(group.memory?.cursor) || 0);
             const recent = (group.messages || [])
-                .filter(message => message && !message.is_system && normalizeText(message.mes))
+                .filter((message, index) => index >= cursor && message && !message.is_system && normalizeText(message.mes))
                 .slice(-limit);
             const lines = recent
                 .map(message => formatMemoryLine(message, character.name))
@@ -1383,8 +1591,7 @@ async function createStGroup(name, memberAvatars, userPersonaAvatar = '') {
         disabled_members: [],
         messages: [],
         redPackets: [],
-        debugLogs: [],
-        injectLimit: 0,
+        injectLimit: DEFAULT_CROSS_CHAT_RAW_LIMIT,
         contextLimit: getSettings().contextLimit,
         noChain: false,
         worldInfoBooks: [],
@@ -1393,9 +1600,17 @@ async function createStGroup(name, memberAvatars, userPersonaAvatar = '') {
         memoryPermissions: getDefaultMemoryPermissions(),
         createdAt: Date.now(),
     };
-    state.localGroups.unshift(group);
+    const previousGroups = state.localGroups;
+    const previousActiveGroupId = state.activeGroupId;
+    state.localGroups = [group, ...state.localGroups];
     state.activeGroupId = group.id;
-    saveLocalState();
+    try {
+        saveLocalState();
+    } catch (error) {
+        state.localGroups = previousGroups;
+        state.activeGroupId = previousActiveGroupId;
+        throw new Error(`创建群聊失败，浏览器无法保存数据：${error?.message || error}`);
+    }
     return group;
 }
 
@@ -1456,6 +1671,10 @@ async function removeMemberFromGroup(groupId, avatar) {
 async function openManagedGroup(groupId) {
     const group = getGroupById(groupId);
     if (!group) throw new Error('找不到群聊。');
+    if (state.orchestrator.active && String(state.activeGroupId) !== String(group.id)) {
+        toastr.warning('当前群仍在生成，请先停止队列再切换群聊。', 'ChatPulse Group Logic');
+        return getCurrentGroup();
+    }
     state.activeGroupId = group.id;
     state.deleteMode = false;
     state.selectedMessageIds.clear();
@@ -1773,11 +1992,16 @@ function isRateLimitError(error) {
     return /429|too many requests|rate limit|速率|频率/i.test(text);
 }
 
-async function generateQuietPromptWithBackoff(options) {
+function sanitizeDebugError(error) {
+    return limitText(String(error?.message || error || '生成失败')
+        .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_API_KEY]'), 1000);
+}
+
+async function generateRawWithBackoff(options) {
     const delay = getApiDelayForNextCall();
     if (delay > 0) await wait(delay);
     try {
-        const result = await generateQuietPrompt(options);
+        const result = await generateRaw(options);
         state.apiDelayMs = Math.max(DEFAULT_SETTINGS.apiDelayBaseMs, Math.floor((state.apiDelayMs || DEFAULT_SETTINGS.apiDelayBaseMs) * 0.85));
         return result;
     } catch (error) {
@@ -1806,6 +2030,7 @@ function getCharacterName(index) {
 
 function collectPostRoundMentions(messageId) {
     const settings = getSettings();
+    if (getCurrentGroup()?.noChain) return;
     if (!settings.postRoundMentionReplies || !state.orchestrator.active) return;
     const message = getCurrentMessages()[messageId];
     if (!message || message.is_user || message.is_system || !normalizeText(message.mes)) return;
@@ -1841,6 +2066,8 @@ async function generateForcedMember(characterIndex, instruction = '') {
     state.typing = [{ id: character.avatar, name: character.name }];
     markQueueCurrent(characterIndex, `${character.name} 正在回复`);
     renderTypingIndicator();
+    let debugPrompt = instruction ? `发言顺序提示：${instruction}` : '正在准备当前角色的独立群聊提示词。';
+    let retried = false;
     try {
         const history = getRecentVisibleMessages(getGroupRawWindowLimit(group))
             .map(message => {
@@ -1854,7 +2081,7 @@ async function generateForcedMember(characterIndex, instruction = '') {
         const groupLongMemory = buildGroupLongMemoryBlock(group);
         const worldInfoBlock = await buildGroupWorldInfoBlock(group, character, `${groupLongMemory}\n${history}\n${characterCard}\n${userPersona}\n${instruction}`);
         const crossChatMemory = await buildCrossChatMemoryBlock(character, group);
-        const prompt = [
+        const systemPrompt = applyLocalPromptMacros([
             '你将生成一条群聊消息。',
             `群名：${group.name}`,
             `你现在扮演：${character.name}`,
@@ -1865,37 +2092,41 @@ async function generateForcedMember(characterIndex, instruction = '') {
             groupLongMemory,
             crossChatMemory,
             getSettings().includeLocalPreset ? `附加约束（不要复述这些字）：${getSettings().localPreset || DEFAULT_SETTINGS.localPreset}` : '',
-            instruction ? `发言顺序提示：${instruction}` : '',
-            buildRedPacketStatePrompt(),
-            `最近聊天：\n${history || '暂无'}`,
-            '',
             `身份边界（最高优先级）：你只能作为 ${character.name} 发言。${userName} 是用户，不是你；其他群成员也不是你。`,
             `禁止代言：不要替 ${userName} 写任何话、想法、动作或决定；不要替任何其他群成员写台词、反应、心情或行动。`,
             `只允许输出 ${character.name} 亲自发到群里的这一条消息。最近聊天只是上下文记录，不是剧本续写模板，不要输出“某某: 内容”的多说话人格式。`,
             `你的输出必须像 ${character.name} 在聊天软件里亲自发送的一条消息。`,
             'If the turn note contains [MENTION], someone just @mentioned you directly. Reply to that message naturally; do not ignore it.',
             '如果用户明确要求你发红包，或者当前角色决定发红包，必须在消息末尾附加隐藏标签：[REDPACKET_SEND:lucky|总金额|份数|留言] 或 [REDPACKET_SEND:equal|总金额|份数|留言]。这个标签只用于系统创建红包，正文里不要解释标签。',
+        ].filter(Boolean).join('\n\n'), character, group);
+        const turnPrompt = applyLocalPromptMacros([
+            instruction ? `发言顺序提示：${instruction}` : '',
+            buildRedPacketStatePrompt(),
+            `最近聊天：\n${history || '暂无'}`,
             `只输出 ${character.name} 接下来会发的一条消息正文。除必要的 REDPACKET_SEND 隐藏标签外，不要输出其他标签、草稿、分析、英文解释、规则、选项或“YOUR REPLY AS”。`,
-        ].filter(Boolean).join('\n');
+        ].filter(Boolean).join('\n\n'), character, group);
+        debugPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${turnPrompt}`;
         const requestOptions = {
-            quietPrompt: prompt,
-            forceChId: characterIndex,
-            responseLength: Math.max(3000, Number(getSettings().responseLength) || DEFAULT_SETTINGS.responseLength),
-            skipWIAN: true,
-            removeReasoning: true,
-            trimToSentence: false,
+            prompt: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: turnPrompt },
+            ],
+            responseLength: Math.max(
+                500,
+                Math.min(6000, Number(getSettings().responseLength) || DEFAULT_SETTINGS.responseLength),
+            ),
+            trimNames: false,
         };
-        let raw = await generateQuietPromptWithBackoff(requestOptions);
+        let raw = await generateRawWithBackoff(requestOptions);
         if (shouldStopQueue() || consumeQueueSkip(characterIndex)) {
             finishQueueItem(characterIndex, 'skipped', '结果已丢弃');
             return { dropped: true, skipped: true };
         }
         let redPacketSends = parseRedPacketSends(raw);
         let sanitized = applyLocalRegex(sanitizeLocalReply(raw, character.name));
-        let retried = false;
         if (redPacketSends.length === 0 && shouldRetryLocalReply(raw, sanitized, character.name)) {
             retried = true;
-            const retryPrompt = [
+            const retrySystemPrompt = applyLocalPromptMacros([
                 `最高优先级身份规则：你只能扮演 ${character.name}。`,
                 `${userName} 是用户，不是你。不要用用户口吻说话，不要替用户写想法、动作或回应。`,
                 '不要替其他群成员写台词、反应、心情、动作或决定。',
@@ -1903,13 +2134,21 @@ async function generateForcedMember(characterIndex, instruction = '') {
                 characterCard ? `角色卡：\n${characterCard}` : '',
                 userPersona,
                 worldInfoBlock,
+            ].filter(Boolean).join('\n\n'), character, group);
+            const retryTurnPrompt = applyLocalPromptMacros([
                 `最近聊天：\n${history || '暂无'}`,
                 `只写一条 ${character.name} 本人会发出的群聊消息。不要解释，不要草稿，不要自我修订，不要写标签，不要写“名字: 台词”的剧本格式。`,
-            ].filter(Boolean).join('\n');
-            raw = await generateQuietPromptWithBackoff({
-                ...requestOptions,
-                quietPrompt: retryPrompt,
-                responseLength: Math.max(1200, Math.floor((Number(getSettings().responseLength) || DEFAULT_SETTINGS.responseLength) / 2)),
+            ].filter(Boolean).join('\n\n'), character, group);
+            raw = await generateRawWithBackoff({
+                prompt: [
+                    { role: 'system', content: retrySystemPrompt },
+                    { role: 'user', content: retryTurnPrompt },
+                ],
+                responseLength: Math.max(
+                    500,
+                    Math.floor((Number(getSettings().responseLength) || DEFAULT_SETTINGS.responseLength) / 2),
+                ),
+                trimNames: false,
             });
             redPacketSends = parseRedPacketSends(raw);
             sanitized = applyLocalRegex(sanitizeLocalReply(raw, character.name));
@@ -1920,10 +2159,11 @@ async function generateForcedMember(characterIndex, instruction = '') {
         }
         appendDebugLog(group, {
             character: character.name,
-            prompt,
+            prompt: debugPrompt,
             raw,
             sanitized,
             retried,
+            error: '',
         });
         const dropped = !sanitized || isOocOrMetaReply(sanitized) || hasSpeakerPrefixLeak(sanitized, character.name);
         const createdPackets = [];
@@ -1954,6 +2194,18 @@ async function generateForcedMember(characterIndex, instruction = '') {
             packets: createdPackets,
         };
     } catch (error) {
+        try {
+            appendDebugLog(group, {
+                character: character.name,
+                prompt: debugPrompt,
+                raw: '',
+                sanitized: '',
+                retried,
+                error: sanitizeDebugError(error),
+            });
+        } catch (debugError) {
+            console.warn('[ChatPulseGroupLogic] Failed to record generation error:', debugError);
+        }
         finishQueueItem(characterIndex, 'failed', error?.message || '生成失败');
         throw error;
     } finally {
@@ -2017,6 +2269,7 @@ function consumePostRoundMentionJobs(primaryOrder, processedKeys = new Set()) {
 }
 
 async function processPostRoundMentionQueue(primaryOrder) {
+    if (getCurrentGroup()?.noChain) return;
     const settings = getSettings();
     const processedPostRoundKeys = new Set();
     const maxPostRoundPasses = Math.max(1, Number(settings.maxSecondaryDepth) || DEFAULT_SETTINGS.maxSecondaryDepth) + 1;
@@ -2044,11 +2297,11 @@ async function processPostRoundMentionQueue(primaryOrder) {
     }
 }
 
-async function runRedPacketReactionRound(packet) {
+async function runRedPacketReactionRound(packet, groupId = state.activeGroupId) {
     const settings = getSettings();
     if (!settings.enabled || !settings.orchestratedEntry || !packet) return;
     const group = getCurrentGroup();
-    if (!group) return;
+    if (!group || String(group.id) !== String(groupId) || !getGroupById(groupId)) return;
     if (state.orchestrator.active) {
         toastr.warning('当前群聊轮询还在进行，红包反应会等下一次消息触发。', 'ChatPulse Group Logic');
         return;
@@ -2369,6 +2622,7 @@ function chooseMention(index = state.mention.index) {
     const nextCursor = before.length + insert.length;
     textarea.focus();
     textarea.setSelectionRange(nextCursor, nextCursor);
+    syncComposerState(textarea);
     hideMentionMenu();
 }
 
@@ -2376,10 +2630,14 @@ function hideEmojiPicker() {
     $('#cpgl_emoji_picker').hide();
 }
 
+function syncComposerState(textarea = $('#cpgl_entry_text')[0]) {
+    $('.cpgl-chat-composer').toggleClass('has-text', !!normalizeText(textarea?.value));
+}
+
 function renderEmojiPicker() {
     const html = `
         <div class="cpgl-emoji-picker-close">
-            <button id="cpgl_emoji_close" type="button" title="关闭">×</button>
+            <button id="cpgl_emoji_close" type="button" title="关闭"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
         </div>
         ${QUICK_EMOJIS.map(emoji => `<button class="cpgl-emoji-item" type="button" data-emoji="${escapeHtml(emoji)}">${escapeHtml(emoji)}</button>`).join('')}
     `;
@@ -2397,6 +2655,7 @@ function addEmojiToComposer(emoji) {
     textarea.focus();
     textarea.setSelectionRange(nextCursor, nextCursor);
     hideEmojiPicker();
+    syncComposerState(textarea);
     updateMentionMenuFromInput(textarea);
 }
 
@@ -2434,6 +2693,17 @@ function clearRuntimeState() {
     state.secondaryDepth = 0;
     state.typing = [];
     renderTypingIndicator();
+}
+
+function syncLocalStateFromAnotherWindow(event) {
+    if (event?.storageArea !== localStorage || event.key !== LOCAL_STATE_KEY) return;
+    loadLocalState();
+    clearPrivateMemoryCache();
+    refreshStatus();
+    recordCpglDebug('localState.synced', {
+        groupCount: state.localGroups.length,
+        activeGroupId: state.activeGroupId || '',
+    });
 }
 
 function resetQueueState() {
@@ -2591,7 +2861,7 @@ function renderSettings() {
                         <input id="cpgl_context_limit" type="number" min="4" max="80" step="1" value="${Number(settings.contextLimit) || DEFAULT_SETTINGS.contextLimit}">
                     </div>
                     <button id="cpgl_open_center_settings" class="menu_button cpgl-settings-open" type="button">打开独立群聊</button>
-                    <div class="cpgl-hint">群成员、AI 互相接话、私聊注入、API 间隔、预设/正则、红包和清空记录都在独立群聊弹窗右侧管理。</div>
+                    <div class="cpgl-hint">群成员、AI 互相接话、私聊注入、API 间隔、预设/正则、红包和清空记录都在独立群聊窗口的“群管理”中。</div>
                     <div id="cpgl_status" class="cpgl-hint"></div>
                 </div>
             </div>
@@ -2611,17 +2881,17 @@ function renderOrchestratedEntry() {
     const topHolder = $('#top-settings-holder');
     if (topHolder.length && !$('#cpgl_top_launcher').length) {
         const topHtml = `
-        <div id="cpgl_top_launcher" class="drawer cpgl-top-launcher" title="ChatPulse 群聊">
-            <div class="drawer-toggle drawer-header">
-                <div class="drawer-icon fa-solid fa-comments fa-fw" title="ChatPulse 群聊"></div>
-            </div>
-        </div>`;
+        <button id="cpgl_top_launcher" class="drawer cpgl-top-launcher" type="button" title="ChatPulse 群聊" aria-label="打开 ChatPulse 群聊">
+            <span class="drawer-toggle drawer-header">
+                <span class="drawer-icon fa-solid fa-comments fa-fw" aria-hidden="true"></span>
+            </span>
+        </button>`;
         topHolder.prepend(topHtml);
     }
     if (!$('#cpgl_launcher').length) {
         const html = `
         <button id="cpgl_launcher" type="button" title="ChatPulse 群聊">
-            <span class="cpgl-launcher-mark">群</span>
+            <span class="cpgl-launcher-mark"><i class="fa-solid fa-comments" aria-hidden="true"></i></span>
             <span class="cpgl-launcher-text">群聊</span>
         </button>`;
         $('body').append(html);
@@ -2644,11 +2914,11 @@ function getLauncherDefaultPosition() {
 }
 
 function shouldShowFloatingLauncher() {
-    if (isTouchViewport()) return false;
     const hasTopEntry = $('#cpgl_top_launcher').length > 0;
     if (!hasTopEntry) return true;
+    if (isTouchViewport()) return false;
     const width = window.innerWidth || document.documentElement.clientWidth || 0;
-    return width <= 820 || isTouchViewport();
+    return width <= 820;
 }
 
 function applyLauncherPosition() {
@@ -2750,19 +3020,33 @@ function bindDraggableLauncher() {
 function renderManagerShell() {
     if ($('#cpgl_manager_modal').length) return;
     const html = `
-    <div id="cpgl_manager_modal" class="cpgl-modal-backdrop" style="display:none;">
+    <div id="cpgl_manager_modal" class="cpgl-modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cpgl_chat_title">
         <div class="cpgl-app-shell">
-            <nav class="cpgl-sidebar-nav">
-                <button id="cpgl_group_list_toggle" class="cpgl-nav-item active" type="button" title="群聊列表">群</button>
-                <button id="cpgl_manager_close" class="cpgl-nav-item" type="button" title="关闭">×</button>
+            <nav class="cpgl-sidebar-nav" aria-label="群聊中心导航">
+                <div class="cpgl-nav-avatar" aria-hidden="true">
+                    <i class="fa-solid fa-user"></i>
+                </div>
+                <button id="cpgl_group_list_toggle" class="cpgl-nav-item active" type="button" title="群聊列表" aria-label="打开或关闭群聊列表" aria-expanded="false" aria-controls="cpgl_group_list">
+                    <i class="fa-solid fa-comment-dots" aria-hidden="true"></i>
+                    <em id="cpgl_group_count_badge" aria-hidden="true">0</em>
+                </button>
+                <div class="cpgl-nav-spacer" aria-hidden="true"></div>
+                <span class="cpgl-nav-visual" title="通讯录" aria-hidden="true"><i class="fa-solid fa-address-book"></i></span>
+                <span class="cpgl-nav-visual" title="收藏" aria-hidden="true"><i class="fa-solid fa-cube"></i></span>
+                <button id="cpgl_manager_close" class="cpgl-nav-item" type="button" title="关闭" aria-label="关闭群聊中心">
+                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
             </nav>
             <aside class="cpgl-middle-column">
                 <div class="cpgl-middle-header">
-                    <div>
-                        <div class="cpgl-middle-title">群聊</div>
-                        <div class="cpgl-hint">ChatPulse Group</div>
-                    </div>
-                    <button id="cpgl_show_create" class="cpgl-icon-btn" type="button" title="发起群聊">＋</button>
+                    <div class="cpgl-mobile-list-title">微信</div>
+                    <label class="cpgl-group-search" for="cpgl_group_search">
+                        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                        <input id="cpgl_group_search" type="search" placeholder="搜索" autocomplete="off">
+                    </label>
+                    <button id="cpgl_show_create" class="cpgl-icon-btn cpgl-create-shortcut" type="button" title="发起群聊" aria-label="发起一个新群聊">
+                        <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                    </button>
                 </div>
                 <div id="cpgl_group_list" class="cpgl-chat-list"></div>
             </aside>
@@ -2770,50 +3054,80 @@ function renderManagerShell() {
                 <section class="cpgl-chat-window">
                     <header class="cpgl-chat-header">
                         <div class="cpgl-chat-header-title">
-                            <span class="cpgl-header-icon">群</span>
+                            <button id="cpgl_mobile_back_to_groups" class="cpgl-mobile-back" type="button" title="返回群聊列表" aria-label="返回群聊列表">
+                                <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+                            </button>
+                            <span class="cpgl-header-icon" aria-hidden="true"><i class="fa-solid fa-user-group"></i></span>
                             <div>
                                 <div id="cpgl_chat_title" class="cpgl-chat-header-name">选择或创建一个群聊</div>
                                 <div id="cpgl_chat_subtitle" class="cpgl-hint">ChatPulse 轮询逻辑会接管这个窗口里的发送。</div>
                             </div>
                         </div>
                         <div class="cpgl-chat-header-actions">
-                            <button id="cpgl_mobile_create_group" type="button" title="发起群聊">＋</button>
-                            <button id="cpgl_header_delete_messages" type="button" title="选择删除对话">🗑</button>
-                            <button id="cpgl_manage_toggle" type="button" title="群管理">⚙</button>
+                            <button id="cpgl_mobile_create_group" type="button" title="发起群聊" aria-label="发起一个新群聊"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+                            <button id="cpgl_header_delete_messages" type="button" title="选择删除对话" aria-label="进入消息选择删除模式" aria-pressed="false"><i class="fa-regular fa-trash-can" aria-hidden="true"></i></button>
+                            <button id="cpgl_help_button" type="button" title="使用帮助" aria-label="打开使用帮助"><i class="fa-regular fa-circle-question" aria-hidden="true"></i></button>
+                            <button id="cpgl_manage_toggle" type="button" title="群管理" aria-label="打开群管理" aria-expanded="false" aria-controls="cpgl_manage_drawer"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></button>
                         </div>
                     </header>
-                    <div id="cpgl_queue_panel" class="cpgl-queue-panel" style="display:none;"></div>
+                    <div id="cpgl_queue_panel" class="cpgl-queue-panel" style="display:none;" role="status" aria-live="polite"></div>
                     <div id="cpgl_chat_messages" class="cpgl-chat-messages"></div>
-                    <div id="cpgl_typing_indicator" class="cpgl-typing-indicator" style="display:none;"></div>
+                    <div id="cpgl_typing_indicator" class="cpgl-typing-indicator" style="display:none;" role="status" aria-live="polite"></div>
                     <div id="cpgl_delete_mode_bar" class="cpgl-delete-mode-bar" style="display:none;"></div>
                     <div class="cpgl-chat-composer">
                         <div id="cpgl_mention_menu" class="cpgl-mention-menu" style="display:none;"></div>
                         <div class="cpgl-input-toolbar">
-                            <button id="cpgl_emoji_toggle" type="button" title="插入表情">☺</button>
-                            <button id="cpgl_quick_redpacket" type="button" title="发红包">🧧</button>
-                            <div id="cpgl_emoji_picker" class="cpgl-emoji-picker" style="display:none;"></div>
+                            <button id="cpgl_emoji_toggle" type="button" title="插入表情" aria-label="打开表情选择器"><i class="fa-regular fa-face-smile" aria-hidden="true"></i></button>
+                            <button id="cpgl_quick_redpacket" type="button" title="更多（当前可发红包）" aria-label="打开更多功能并发送红包"><i class="fa-solid fa-circle-plus" aria-hidden="true"></i></button>
+                        <div id="cpgl_emoji_picker" class="cpgl-emoji-picker" style="display:none;"></div>
                         </div>
-                        <textarea id="cpgl_entry_text" rows="3" placeholder="在这里发群消息。无 @ 随机轮询；@角色 则点名优先。"></textarea>
+                        <label class="cpgl-visually-hidden" for="cpgl_entry_text">群聊消息</label>
+                        <textarea id="cpgl_entry_text" rows="3" placeholder="发消息"></textarea>
                         <div class="cpgl-entry-actions">
                             <button id="cpgl_entry_send" class="cpgl-send-button" type="button">发送</button>
                         </div>
                     </div>
                 </section>
+                <button id="cpgl_manage_scrim" class="cpgl-manage-scrim" type="button" aria-label="关闭群管理" style="display:none;"></button>
                 <aside id="cpgl_manage_drawer" class="cpgl-manage-drawer">
                     <div class="cpgl-drawer-header">
-                        <strong><span>⚙</span> 群管理</strong>
-                        <button id="cpgl_manage_close" class="cpgl-icon-btn" type="button" title="关闭">×</button>
+                        <strong>聊天信息</strong>
+                        <button id="cpgl_manage_close" class="cpgl-icon-btn" type="button" title="关闭" aria-label="关闭群管理">
+                            <i class="fa-solid fa-xmark cpgl-drawer-close-desktop" aria-hidden="true"></i>
+                            <i class="fa-solid fa-chevron-left cpgl-drawer-close-mobile" aria-hidden="true"></i>
+                        </button>
                     </div>
-                    <section class="cpgl-section">
-                        <h4>群名称</h4>
+                    <div class="cpgl-drawer-intro">
+                        <strong>调整当前群聊</strong>
+                        <span>带“所有群共用”的项目会同时影响其他 ChatPulse 群聊。</span>
+                    </div>
+                    <div class="cpgl-mobile-drawer-tools" aria-label="手机端快捷操作">
+                        <button id="cpgl_mobile_open_help" type="button">
+                            <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
+                            <span>使用帮助</span>
+                        </button>
+                        <button id="cpgl_mobile_delete_messages" type="button">
+                            <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+                            <span>选择删除</span>
+                        </button>
+                    </div>
+                    <nav class="cpgl-drawer-jump-nav" aria-label="群管理快速导航">
+                        <button type="button" data-target="#cpgl_group_identity_section">基础</button>
+                        <button type="button" data-target="#cpgl_group_members_section">成员</button>
+                        <button type="button" data-target="#cpgl_world_info_section">世界书</button>
+                        <button type="button" data-target="#cpgl_memory_section">记忆</button>
+                        <button type="button" data-target="#cpgl_debug_section">调试</button>
+                    </nav>
+                    <section id="cpgl_group_identity_section" class="cpgl-section">
+                        <h4>群名称 <span class="cpgl-scope-badge">当前群</span></h4>
                         <div class="cpgl-group-name-row">
-                            <input id="cpgl_group_name_input" type="text" placeholder="群聊名称">
+                            <input id="cpgl_group_name_input" type="text" placeholder="群聊名称" aria-label="群聊名称">
                             <button id="cpgl_rename_group" class="cpgl-icon-btn" type="button" title="修改群名">✎</button>
                         </div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>User 人设</h4>
-                        <select id="cpgl_group_user_persona_select"></select>
+                    <section id="cpgl_group_persona_section" class="cpgl-section">
+                        <h4>你在群里的身份 <span class="cpgl-scope-badge">当前群</span></h4>
+                        <select id="cpgl_group_user_persona_select" aria-label="当前群使用的 User 人设"></select>
                         <div id="cpgl_group_user_persona_hint" class="cpgl-hint"></div>
                     </section>
                     <section id="cpgl_message_delete_section" class="cpgl-section">
@@ -2825,22 +3139,22 @@ function renderManagerShell() {
                         <div id="cpgl_message_delete_list" class="cpgl-delete-message-list"></div>
                         <button id="cpgl_delete_selected_messages" type="button" class="cpgl-danger-outline" disabled>删除选中</button>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>群成员 <span id="cpgl_member_count">(0)</span></h4>
+                    <section id="cpgl_group_members_section" class="cpgl-section">
+                        <h4>群成员 <span id="cpgl_member_count">(0)</span> <span class="cpgl-scope-badge">当前群</span></h4>
                         <div id="cpgl_current_members" class="cpgl-list"></div>
                         <div class="cpgl-row cpgl-add-row">
-                            <select id="cpgl_add_member_select"></select>
+                            <select id="cpgl_add_member_select" aria-label="选择要加入当前群的角色"></select>
                             <button id="cpgl_add_member" class="menu_button">拉人</button>
                         </div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>运行队列</h4>
+                    <section id="cpgl_queue_section" class="cpgl-section">
+                        <h4>运行队列 <span class="cpgl-scope-badge">当前任务</span></h4>
                         <div id="cpgl_queue_drawer" class="cpgl-queue-drawer"></div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>AI 控制</h4>
+                    <section id="cpgl_group_ai_section" class="cpgl-section">
+                        <h4>本群 AI 行为 <span class="cpgl-scope-badge">当前群</span></h4>
                         <label class="cpgl-switch-row">
-                            <span>⚡ 禁止AI互相接话</span>
+                            <span>⚡ 禁止 AI 因互相 @ 追加回复</span>
                             <input id="cpgl_drawer_no_chain" type="checkbox">
                             <i></i>
                         </label>
@@ -2849,23 +3163,26 @@ function renderManagerShell() {
                                 <span>📥 跨聊原文备用条数</span>
                                 <strong id="cpgl_drawer_inject_value">0</strong>
                             </div>
-                            <input id="cpgl_drawer_inject_limit" type="range" min="0" max="30" step="1">
-                            <p>只在权限允许时读取私聊或其他群的近期原文。0 = 只用摘要。</p>
+                            <input id="cpgl_drawer_inject_limit" type="range" min="0" max="30" step="1" aria-label="跨聊原文备用条数">
+                            <p>只在权限允许且 User persona 相同时读取近期原文。0 = 只用已有摘要。</p>
                         </div>
                         <div class="cpgl-slider-row">
                             <div>
                                 <span>🧠 AI 记忆视界（上下文条数）</span>
                                 <strong id="cpgl_drawer_context_value">0</strong>
                             </div>
-                            <input id="cpgl_drawer_context_limit" type="range" min="4" max="80" step="1">
+                            <input id="cpgl_drawer_context_limit" type="range" min="4" max="80" step="1" aria-label="群聊上下文条数">
                             <p>AI 在本群能感知的最近消息条数。超出该线的旧消息将被忽略。</p>
                         </div>
+                    </section>
+                    <section id="cpgl_global_generation_section" class="cpgl-section">
+                        <h4>生成节奏 <span class="cpgl-scope-badge is-global">所有群共用</span></h4>
                         <div class="cpgl-slider-row">
                             <div>
                                 <span>⏱ API 初始间隔</span>
                                 <strong id="cpgl_api_base_value">0s</strong>
                             </div>
-                            <input id="cpgl_api_base_delay" type="range" min="0" max="20000" step="500">
+                            <input id="cpgl_api_base_delay" type="range" min="0" max="20000" step="500" aria-label="初始 API 间隔">
                             <p>每轮第一个角色请求前等待多久。</p>
                         </div>
                         <div class="cpgl-slider-row">
@@ -2873,7 +3190,7 @@ function renderManagerShell() {
                                 <span>⏳ 每次递增间隔</span>
                                 <strong id="cpgl_api_step_value">0s</strong>
                             </div>
-                            <input id="cpgl_api_step_delay" type="range" min="0" max="10000" step="500">
+                            <input id="cpgl_api_step_delay" type="range" min="0" max="10000" step="500" aria-label="每次递增 API 间隔">
                             <p>同一轮里，每多一个角色，请求间隔增加多少。</p>
                         </div>
                         <div class="cpgl-slider-row">
@@ -2881,7 +3198,7 @@ function renderManagerShell() {
                                 <span>🧯 最大退避间隔</span>
                                 <strong id="cpgl_api_max_value">0s</strong>
                             </div>
-                            <input id="cpgl_api_max_delay" type="range" min="3000" max="60000" step="1000">
+                            <input id="cpgl_api_max_delay" type="range" min="3000" max="60000" step="1000" aria-label="最大 API 退避间隔">
                             <p>撞到 Too Many Requests 后，间隔会自动提高但不超过这里。</p>
                         </div>
                         <div class="cpgl-slider-row">
@@ -2889,12 +3206,13 @@ function renderManagerShell() {
                                 <span>📏 输出上限</span>
                                 <strong id="cpgl_response_length_value">3000</strong>
                             </div>
-                            <input id="cpgl_response_length" type="range" min="500" max="6000" step="100">
+                            <input id="cpgl_response_length" type="range" min="500" max="6000" step="100" aria-label="单个角色输出上限">
                             <p>单个角色每次生成的最大输出长度。</p>
                         </div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>群聊世界书</h4>
+                    <section id="cpgl_world_info_section" class="cpgl-section">
+                        <h4>群聊世界书 <span class="cpgl-scope-badge">当前群</span></h4>
+                        <p class="cpgl-hint">可不选择；世界书不是群聊必需项，角色卡本身仍会生效。</p>
                         <label class="cpgl-switch-row">
                             <span>同时读取成员角色卡世界书</span>
                             <input id="cpgl_include_character_world_info" type="checkbox">
@@ -2903,8 +3221,8 @@ function renderManagerShell() {
                         <div id="cpgl_world_info_status" class="cpgl-hint"></div>
                         <div id="cpgl_world_info_books" class="cpgl-world-book-list"></div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>长期记忆</h4>
+                    <section id="cpgl_memory_section" class="cpgl-section">
+                        <h4>长期记忆 <span class="cpgl-scope-badge">当前群</span></h4>
                         <label class="cpgl-switch-row">
                             <span>启用本群共享摘要</span>
                             <input id="cpgl_memory_enabled" type="checkbox">
@@ -2915,7 +3233,7 @@ function renderManagerShell() {
                                 <span>R 原文窗口</span>
                                 <strong id="cpgl_memory_r_value">24</strong>
                             </div>
-                            <input id="cpgl_memory_r" type="range" min="4" max="120" step="1">
+                            <input id="cpgl_memory_r" type="range" min="4" max="120" step="1" aria-label="长期记忆原文窗口 R">
                             <p>最新 R 条消息保留原文，窗口外消息才会被总结。</p>
                         </div>
                         <div class="cpgl-slider-row">
@@ -2923,11 +3241,11 @@ function renderManagerShell() {
                                 <span>S 触发阈值</span>
                                 <strong id="cpgl_memory_s_value">16</strong>
                             </div>
-                            <input id="cpgl_memory_s" type="range" min="4" max="80" step="1">
+                            <input id="cpgl_memory_s" type="range" min="4" max="80" step="1" aria-label="长期记忆触发阈值 S">
                             <p>窗口外未摘要消息达到 S 条时，回复前先总结；失败则中止本轮。</p>
                         </div>
                         <div class="cpgl-row">
-                            <label for="cpgl_summary_provider">总结模型</label>
+                            <label for="cpgl_summary_provider">总结模型 <span class="cpgl-scope-badge is-global">所有群共用</span></label>
                             <select id="cpgl_summary_provider">
                                 <option value="current">当前模型</option>
                                 <option value="custom">自定义小模型</option>
@@ -2954,7 +3272,7 @@ function renderManagerShell() {
                             <p class="cpgl-hint">自定义小模型走 SillyTavern 的 Custom OpenAI-compatible 后端，API Key 使用 ST 全局 Custom API Key。</p>
                         </div>
                         <label class="cpgl-switch-row">
-                            <span>私聊可读取本群摘要</span>
+                            <span>私聊可读取本群记忆</span>
                             <input id="cpgl_expose_group_memory_private" type="checkbox">
                             <i></i>
                         </label>
@@ -2964,7 +3282,7 @@ function renderManagerShell() {
                             <i></i>
                         </label>
                         <label class="cpgl-switch-row">
-                            <span>本群可读取角色其他群摘要</span>
+                            <span>本群可读取角色其他群记忆</span>
                             <input id="cpgl_allow_other_group_memory" type="checkbox">
                             <i></i>
                         </label>
@@ -2975,8 +3293,8 @@ function renderManagerShell() {
                         </div>
                         <div id="cpgl_memory_summaries" class="cpgl-memory-summaries"></div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>独立预设 / 正则</h4>
+                    <section id="cpgl_preset_section" class="cpgl-section">
+                        <h4>独立预设 / 正则 <span class="cpgl-scope-badge is-global">所有群共用</span></h4>
                         <textarea id="cpgl_local_preset" rows="6" placeholder="导入或编辑这个弹窗专用的群聊预设"></textarea>
                         <label class="cpgl-switch-row">
                             <span>把上方预设作为附加约束发送</span>
@@ -2989,53 +3307,75 @@ function renderManagerShell() {
                             <input id="cpgl_import_file" type="file" accept=".json,.txt" style="display:none;">
                         </div>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>最近输入 / 输出</h4>
+                    <section id="cpgl_debug_section" class="cpgl-section">
+                        <h4>最近输入 / 输出 <span class="cpgl-scope-badge">当前群</span></h4>
+                        <p class="cpgl-hint">仅保留在当前页面会话中，刷新后自动清空，避免把私聊原文长期写入浏览器存储。</p>
                         <div id="cpgl_debug_logs" class="cpgl-debug-logs"></div>
                         <button id="cpgl_clear_debug_logs" type="button" class="cpgl-danger-outline">清空调试记录</button>
                     </section>
-                    <section class="cpgl-section">
-                        <h4>红包记录</h4>
+                    <section id="cpgl_redpacket_history_section" class="cpgl-section">
+                        <h4>红包记录 <span class="cpgl-scope-badge">当前群</span></h4>
                         <div id="cpgl_red_packet_list" class="cpgl-list"></div>
                     </section>
-                    <section class="cpgl-section cpgl-danger-section">
+                    <section id="cpgl_danger_section" class="cpgl-section cpgl-danger-section">
                         <h4>危险操作</h4>
                         <button id="cpgl_clear_queue_danger" type="button" class="cpgl-danger-outline">清空队列</button>
                         <button id="cpgl_clear_messages_danger" type="button" class="cpgl-danger-outline">删除对话记录</button>
+                        <button id="cpgl_delete_group_danger" type="button" class="cpgl-danger-outline cpgl-danger-strong">删除当前群聊</button>
                     </section>
                 </aside>
             </main>
         </div>
-        <div id="cpgl_create_modal" class="cpgl-create-modal" style="display:none;">
+        <div id="cpgl_create_modal" class="cpgl-create-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cpgl_create_title">
             <div class="cpgl-create-card">
                 <div class="cpgl-create-header">
-                    <strong>发起群聊</strong>
-                    <button id="cpgl_create_modal_close" type="button" class="cpgl-icon-btn">×</button>
+                    <div>
+                        <span class="cpgl-create-eyebrow">创建群聊</span>
+                        <strong id="cpgl_create_title">组建你的聊天小队</strong>
+                        <small>群名、人设和成员只属于这个群，之后仍可修改。</small>
+                    </div>
+                    <button id="cpgl_create_modal_close" type="button" class="cpgl-icon-btn" aria-label="关闭创建群聊"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
                 </div>
                 <div class="cpgl-create-body">
-                    <input id="cpgl_new_group_name" type="text" placeholder="群聊名称">
                     <label class="cpgl-create-field">
-                        <span>User 人设</span>
+                        <span><b>1</b> 群聊名称 <small>留空会根据成员自动命名</small></span>
+                        <input id="cpgl_new_group_name" type="text" maxlength="48" autocomplete="off" placeholder="例如：星港夜话">
+                    </label>
+                    <label class="cpgl-create-field">
+                        <span><b>2</b> 你在这个群中的身份 <small>使用已有 SillyTavern User 人设</small></span>
                         <select id="cpgl_new_user_persona"></select>
                     </label>
-                    <div class="cpgl-search-shell">
-                        <span>⌕</span>
-                        <input id="cpgl_create_search" type="text" placeholder="搜索角色...">
+                    <section class="cpgl-create-member-section" aria-labelledby="cpgl_create_member_title">
+                        <div class="cpgl-create-member-heading">
+                            <span id="cpgl_create_member_title"><b>3</b> 选择群成员</span>
+                            <strong id="cpgl_create_selected_count">已选择 0 位</strong>
+                        </div>
+                        <div class="cpgl-search-shell">
+                            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                            <label class="cpgl-visually-hidden" for="cpgl_create_search">搜索角色</label>
+                            <input id="cpgl_create_search" type="text" autocomplete="off" placeholder="搜索角色...">
+                        </div>
+                        <div id="cpgl_create_members" class="cpgl-create-members"></div>
+                    </section>
+                    <div class="cpgl-create-footer">
+                        <span id="cpgl_create_validation" role="status" aria-live="polite">至少选择一位角色才能创建。</span>
+                        <button id="cpgl_create_group" class="cpgl-send-button" type="button" disabled>
+                            创建群聊
+                            <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                        </button>
                     </div>
-                    <div id="cpgl_create_members" class="cpgl-create-members"></div>
-                    <button id="cpgl_create_group" class="cpgl-send-button" type="button">创建</button>
                 </div>
             </div>
         </div>
-        <div id="cpgl_redpacket_modal" class="cpgl-redpacket-modal" style="display:none;">
+        <div id="cpgl_redpacket_modal" class="cpgl-redpacket-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cpgl_redpacket_title">
             <div class="cpgl-redpacket-card">
                 <div class="cpgl-redpacket-header">
-                    <strong>🧧 发送红包</strong>
-                    <button id="cpgl_redpacket_close" type="button">×</button>
+                    <strong id="cpgl_redpacket_title"><i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i> 发送红包</strong>
+                    <button id="cpgl_redpacket_close" type="button" aria-label="关闭红包窗口"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
                 </div>
                 <div class="cpgl-redpacket-tabs">
-                    <button id="cpgl_packet_lucky" class="active" type="button">🎲 拼手气</button>
-                    <button id="cpgl_packet_fixed" type="button">📦 普通</button>
+                    <button id="cpgl_packet_lucky" class="active" type="button"><i class="fa-solid fa-shuffle" aria-hidden="true"></i> 拼手气</button>
+                    <button id="cpgl_packet_fixed" type="button"><i class="fa-solid fa-box" aria-hidden="true"></i> 普通</button>
                 </div>
                 <div class="cpgl-redpacket-body">
                     <label>
@@ -3053,21 +3393,94 @@ function renderManagerShell() {
                     <div class="cpgl-redpacket-summary">
                         <div><span>合计:</span><strong id="cpgl_packet_total_preview">¥0.00</strong></div>
                     </div>
-                    <button id="cpgl_user_packet_send" class="cpgl-redpacket-send" type="button">🧧 塞钱进红包</button>
+                    <button id="cpgl_user_packet_send" class="cpgl-redpacket-send" type="button"><i class="fa-solid fa-envelope" aria-hidden="true"></i> 塞钱进红包</button>
                 </div>
+            </div>
+        </div>
+        <div id="cpgl_help_modal" class="cpgl-help-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cpgl_help_title">
+            <div class="cpgl-help-card">
+                <header class="cpgl-help-header">
+                    <div>
+                        <span>ChatPulse 使用手册</span>
+                        <h2 id="cpgl_help_title">从建群到长期记忆，一次看懂</h2>
+                    </div>
+                    <button id="cpgl_help_close" type="button" aria-label="关闭使用帮助"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+                </header>
+                <div class="cpgl-help-body">
+                    <section class="cpgl-help-quickstart">
+                        <div class="cpgl-help-section-title">
+                            <h3>快速开始</h3>
+                            <small>第一次只需要完成四件事</small>
+                        </div>
+                        <ol>
+                            <li><b aria-hidden="true">1</b><div><strong>确认 ST 普通私聊可生成</strong><span>群聊直接复用 SillyTavern 当前连接的模型/API。</span></div></li>
+                            <li><b aria-hidden="true">2</b><div><strong>发起群聊</strong><span>填写群名，并从 ST 已有 User 人设中选择你在本群的身份。</span></div></li>
+                            <li><b aria-hidden="true">3</b><div><strong>选择至少一位角色</strong><span>可以把不同的 SillyTavern 角色卡放进同一个群，之后也能继续拉人或踢人。</span></div></li>
+                            <li><b aria-hidden="true">4</b><div><strong>发送第一条消息</strong><span>不写 @ 会随机轮询；@角色 会让对方优先回复。</span></div></li>
+                        </ol>
+                    </section>
+                    <section>
+                        <div class="cpgl-help-section-title"><h3>按钮图鉴</h3><small>界面中的核心操作</small></div>
+                        <div class="cpgl-help-feature-grid">
+                            <article><b aria-hidden="true"><i class="fa-solid fa-plus"></i></b><div><strong>新建群聊</strong><span>电脑端在左侧群列表，手机端先返回群列表，再点标题栏的“＋”。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-solid fa-comments"></i></b><div><strong>群列表</strong><span>手机端从聊天页左上角返回切换旧群。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-regular fa-face-smile"></i></b><div><strong>表情</strong><span>把表情插入输入框，不会立刻发送。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-solid fa-circle-plus"></i></b><div><strong>红包</strong><span>点输入框旁圆形“＋”，发送普通或拼手气红包。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-regular fa-trash-can"></i></b><div><strong>按条删除</strong><span>电脑端点标题栏垃圾桶；手机端从“··· → 选择删除”进入。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-solid fa-ellipsis"></i></b><div><strong>群管理</strong><span>成员、世界书、记忆、队列和调试都在这里。</span></div></article>
+                            <article><b aria-hidden="true"><i class="fa-regular fa-circle-question"></i></b><div><strong>帮助</strong><span>电脑端点“?”；手机端从“··· → 使用帮助”进入。</span></div></article>
+                        </div>
+                    </section>
+                    <section class="cpgl-help-rules">
+                        <div class="cpgl-help-section-title"><h3>消息如何触发回复</h3><small>发送前先看这一条</small></div>
+                        <div><strong>普通消息</strong><span>所有群成员随机排序，依次自然接话。</span></div>
+                        <div><strong>@角色</strong><span>被点名角色优先，其他成员随后继续接话。</span></div>
+                        <div><strong>@全体</strong><span>对全体成员发言，成员顺序仍会随机。</span></div>
+                        <div><strong>Ctrl / ⌘ + Enter</strong><span>电脑端快速发送；单独 Enter 用于换行。</span></div>
+                    </section>
+                    <section class="cpgl-help-notice">
+                        <h3>关于记忆与隐私</h3>
+                        <p>每个群默认开启本群长期摘要；“私聊可读取本群记忆”默认开启。角色私聊或其他群的记忆默认不会进入本群，可在群管理中单独授权；即使授权，也只会在同一个 User 人设之间共享。</p>
+                        <p>群聊、红包和摘要保存在当前浏览器 localStorage，不会创建 SillyTavern 原生群聊。清除站点数据会丢失；换设备、浏览器或 ST 地址不会自动同步。完整 Prompt 与输出调试只保留在当前页面会话中，刷新后自动清除。</p>
+                    </section>
+                    <section class="cpgl-help-rules">
+                        <div class="cpgl-help-section-title"><h3>常见疑问</h3><small>第一次使用最容易卡住的地方</small></div>
+                        <div><strong>User 怎么选？</strong><span>建群时从 SillyTavern 已有 User 人设中选择；若列表没有想要的身份，请先在 ST 创建或启用它，再刷新页面。没有可用人设时会使用 ST 当前用户名显示，但不会启用跨聊记忆。</span></div>
+                        <div><strong>还要单独连接 API 吗？</strong><span>角色聊天不用，直接复用 ST 当前模型/API。只有选择“自定义小模型”总结时才需填写 Endpoint/Model，并使用 ST 全局 Custom API Key。</span></div>
+                        <div><strong>世界书必须挂吗？</strong><span>不必须。没有世界书也会使用角色卡、User 人设和本群上下文正常生成。</span></div>
+                        <div><strong>为什么第二个群像“不见了”？</strong><span>两个群都会保留。电脑端看左侧群列表；手机端点聊天页左上角返回箭头。不同角色卡也可以加入同一个群。</span></div>
+                        <div><strong>创建按钮为什么是灰色？</strong><span>至少勾选一张角色卡才能创建。若列表为空，请先在 SillyTavern 导入或创建角色卡，再重新打开建群窗口。</span></div>
+                    </section>
+                    <section class="cpgl-help-troubleshoot">
+                        <div class="cpgl-help-section-title"><h3>没有回复时</h3><small>按顺序检查</small></div>
+                        <ol>
+                            <li>确认 SillyTavern 普通私聊可以正常生成。</li>
+                            <li>确认当前群至少有一位有效角色成员。</li>
+                            <li>查看运行队列是否正在等待 API 间隔或速率退避。</li>
+                            <li>打开群管理里的“最近输入 / 输出”，查看错误、Prompt 与 Raw Output；失败请求也会留下诊断。</li>
+                            <li>世界书不是回复的前置条件，无需为了排错临时挂一本。</li>
+                        </ol>
+                    </section>
+                </div>
+                <footer class="cpgl-help-footer">
+                    <span>完整说明：<a href="https://github.com/NANA3333333/ChatPulseGroupLogic/blob/main/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">USER_GUIDE.md</a></span>
+                    <button id="cpgl_help_restart_tour" type="button">重新开始引导（不删除群聊）</button>
+                </footer>
             </div>
         </div>
     </div>`;
     $('body').append(html);
+    ensureOnboardingRoot();
     renderManagerModal();
 }
 
 function characterOptionHtml(character, checked = false) {
     return `
-        <label class="cpgl-member-option">
+        <label class="cpgl-member-option ${checked ? 'is-selected' : ''}">
             <input type="checkbox" value="${escapeHtml(character.avatar)}" ${checked ? 'checked' : ''}>
             <img src="${escapeHtml(getCharacterAvatarUrl(character))}" alt="">
             <span>${escapeHtml(character.name || character.avatar)}</span>
+            <i aria-hidden="true">${checked ? '✓' : ''}</i>
         </label>`;
 }
 
@@ -3078,6 +3491,723 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+function ensureOnboardingRoot() {
+    if ($('#cpgl_tour_root').length) return;
+    $('body').append(`
+        <div id="cpgl_tour_root" class="cpgl-tour-root" style="display:none;" aria-hidden="true">
+            <div id="cpgl_tour_spotlight" class="cpgl-tour-spotlight"></div>
+            <svg id="cpgl_tour_arrow" class="cpgl-tour-arrow" aria-hidden="true">
+                <defs>
+                    <marker id="cpgl_tour_arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z"></path>
+                    </marker>
+                </defs>
+                <path id="cpgl_tour_arrow_path" marker-end="url(#cpgl_tour_arrowhead)"></path>
+            </svg>
+            <section id="cpgl_tour_card" class="cpgl-tour-card" role="dialog" aria-live="polite" aria-labelledby="cpgl_tour_title" aria-describedby="cpgl_tour_description" tabindex="-1">
+                <div class="cpgl-tour-topline">
+                    <span id="cpgl_tour_progress">新手任务</span>
+                    <button id="cpgl_tour_skip" type="button">跳过引导</button>
+                </div>
+                <div class="cpgl-tour-progress-track" aria-hidden="true"><i id="cpgl_tour_progress_bar"></i></div>
+                <span id="cpgl_tour_kicker" class="cpgl-tour-kicker"></span>
+                <h3 id="cpgl_tour_title"></h3>
+                <div id="cpgl_tour_description" class="cpgl-tour-description"></div>
+                <div id="cpgl_tour_callout" class="cpgl-tour-callout"></div>
+                <div class="cpgl-tour-actions">
+                    <span id="cpgl_tour_instruction"></span>
+                    <button id="cpgl_tour_retry" type="button" class="cpgl-tour-secondary" style="display:none;">重新检测</button>
+                    <button id="cpgl_tour_next" type="button">下一步</button>
+                </div>
+            </section>
+        </div>
+    `);
+}
+
+function getOnboardingSteps() {
+    const personaCount = getAvailableUserPersonas().length;
+    const characterCount = characters.length;
+    const steps = [
+        {
+            id: 'welcome',
+            kicker: '欢迎来到 ChatPulse',
+            title: '用一分钟，创建你的第一个群聊',
+            description: `
+                <p>这不是一篇只能阅读的说明。接下来会用高亮和箭头带你实际创建一个群聊，再认识发送、红包、删除和群管理。</p>
+                <div class="cpgl-tour-checklist">
+                    <span class="${characterCount ? 'is-ready' : 'is-missing'}"><b>${characterCount ? '✓' : '!'}</b> 已读取 ${characterCount} 张角色卡</span>
+                    <span class="${personaCount ? 'is-ready' : ''}"><b>${personaCount ? '✓' : 'i'}</b> 已读取 ${personaCount || 0} 个 User 人设${personaCount ? '' : '，将使用 ST 当前用户名显示并关闭跨聊记忆'}</span>
+                    <span><b>i</b> 真正发送消息前，请先确认 ST 普通私聊可以生成</span>
+                </div>`,
+            callout: characterCount
+                ? '引导只会创建群聊，不会替你发送消息或调用模型。'
+                : '目前没有角色卡，仍可先浏览界面；到选择成员时会告诉你如何继续。',
+            nextLabel: '开始新手任务',
+        },
+        {
+            id: 'entry',
+            kicker: '第 1 步',
+            title: '打开独立群聊中心',
+            description: '<p>这里是 ChatPulse 群聊入口。群聊数据独立保存在浏览器里，不会创建或修改 SillyTavern 原生群聊。</p>',
+            callout: '请点击箭头指向的群聊入口。',
+            target: () => findFirstVisibleElement(['#cpgl_top_launcher', '#cpgl_launcher', '#cpgl_open_center_settings']),
+            waitFor: 'center-opened',
+        },
+        {
+            id: 'create',
+            kicker: '第 2 步',
+            title: '发起一个新群聊',
+            description: '<p>桌面端可以使用左侧群聊列表旁的“＋”，手机端则使用群聊列表标题栏中的“＋”。空白页中央也有同样的入口。</p>',
+            callout: '点击高亮的“发起群聊”按钮。',
+            target: () => findFirstVisibleElement(['#cpgl_empty_create_group', '#cpgl_show_create', '#cpgl_mobile_create_group']),
+            waitFor: 'create-modal-opened',
+        },
+        {
+            id: 'name',
+            kicker: '第 3 步',
+            title: '先给这个群起一个名字',
+            description: '<p>名字只用于区分你的多个群聊。这里要求你填一个名字来完成练习；日常使用时留空也会自动命名。</p>',
+            callout: '输入任意群名后，“下一步”会亮起。',
+            target: '#cpgl_new_group_name',
+            nextLabel: '名字填好了',
+        },
+        {
+            id: 'persona',
+            kicker: '第 4 步',
+            title: '选择你在这个群中的身份',
+            description: '<p>每个群都能绑定不同的 SillyTavern User 人设。你的消息头像、名字、红包身份和注入给角色的用户设定都会使用它。</p>',
+            callout: personaCount
+                ? '可以保留默认项，也可以换成更适合这个群的人设。'
+                : '没有可用人设时会使用 ST 当前用户名显示；为避免串身份，跨聊记忆会保持关闭。',
+            target: '#cpgl_new_user_persona',
+            nextLabel: '确认这个身份',
+        },
+        {
+            id: 'members',
+            kicker: '第 5 步',
+            title: '选择至少一位群成员',
+            description: '<p>勾选要加入群聊的角色卡。以后仍可以在群管理中拉人或踢人，成员变化还会触发群友的自然反应。</p>',
+            callout: characterCount
+                ? '至少勾选一位角色，选好后继续。'
+                : '这里没有角色卡。请先在 SillyTavern 导入或创建角色，再从帮助中心重新开始引导。',
+            target: () => findFirstVisibleElement(['#cpgl_create_members .cpgl-member-option', '#cpgl_create_members']),
+            nextLabel: characterCount ? '成员选好了' : '查看解决办法',
+        },
+        {
+            id: 'confirm',
+            kicker: '第 6 步',
+            title: '正式创建群聊',
+            description: '<p>点击后才会写入浏览器 localStorage。创建成功后，这个群会自动成为当前群。</p>',
+            callout: '只有创建成功，引导才会进入聊天功能介绍。',
+            target: '#cpgl_create_group',
+            waitFor: 'group-created',
+        },
+        {
+            id: 'composer',
+            kicker: '聊天基础',
+            title: '从这里发送第一条消息',
+            description: '<p><b>不写 @</b>：成员随机排序、依次接话。<br><b>@角色</b>：被点名角色优先，其他成员随后继续。<br><b>@全体</b>：向所有成员发言。</p>',
+            callout: '引导不会强迫你现在发送，避免在 API 尚未配置好时产生请求。',
+            target: '#cpgl_entry_text',
+            nextLabel: '认识快捷功能',
+        },
+        {
+            id: 'quick-tools',
+            kicker: '聊天工具',
+            title: '表情和更多功能都在输入框旁',
+            description: '<p>“☺”会把表情插入输入框；圆形“＋”会打开更多功能（当前可发红包）。队列空闲时，红包会触发群成员反应；若正在生成，则顺延到下一次消息。</p>',
+            callout: '红包和领取记录只保存在当前群。',
+            target: '#cpgl_quick_redpacket',
+            nextLabel: '继续',
+        },
+        {
+            id: 'delete-messages',
+            kicker: '整理记录',
+            title: '按条选择并删除消息',
+            description: '<p>点击垃圾桶会进入选择模式，然后直接点聊天区中的消息。只有再次确认后才会删除，关联红包也会一起处理。</p>',
+            callout: '删除整个群聊在群管理最底部的“危险操作”中。',
+            target: '#cpgl_header_delete_messages',
+            nextLabel: '继续',
+        },
+        {
+            id: 'manage',
+            kicker: '高级功能',
+            title: '打开群管理',
+            description: '<p>成员、人设、世界书、长期记忆、API 节奏、运行队列和调试记录都集中在这里。</p>',
+            callout: '点击右上角“···”，打开当前群的管理抽屉。',
+            target: '#cpgl_manage_toggle',
+            waitFor: 'manage-opened',
+        },
+        {
+            id: 'manager-overview',
+            kicker: '记忆与隐私',
+            title: '长期记忆默认开启',
+            description: '<p>最新 R 条消息保留原文，窗口外累计到 S 条时先总结。默认允许角色私聊读取本群记忆；本群读取角色私聊或其他群记忆则默认关闭。</p>',
+            callout: '带“当前群”的设置只影响这里；带“所有群共用”的模型与生成设置会影响全部 ChatPulse 群。',
+            target: '#cpgl_memory_section',
+            nextLabel: '最后一步',
+        },
+        {
+            id: 'help',
+            kicker: '完成',
+            title: isCompactViewport() ? '随时从“聊天信息 → 使用帮助”重新查看' : '随时从“?”重新查看',
+            description: isCompactViewport()
+                ? '<p>帮助页包含按钮图鉴、回复规则、记忆权限和排错顺序，也能重新启动这套交互式引导。点击高亮的“使用帮助”会完成教程并立即打开帮助；点击下方“完成新手引导”只结束教程。</p>'
+                : '<p>帮助页包含按钮图鉴、回复规则、记忆权限和排错顺序，也能重新启动这套交互式引导。点击高亮的“?”会完成教程并立即打开帮助；点击下方“完成新手引导”只结束教程。</p>',
+            callout: '两种操作都不会删除刚创建的群。完成后就可以自由聊天。',
+            target: () => findFirstVisibleElement(['#cpgl_help_button', '#cpgl_mobile_open_help']),
+            nextLabel: '完成新手引导',
+        },
+    ];
+    return isCompactViewport() ? steps.filter(step => step.id !== 'delete-messages') : steps;
+}
+
+function findFirstVisibleElement(selectors) {
+    for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element && isElementVisible(element)) return element;
+    }
+    return null;
+}
+
+function isElementVisible(element) {
+    if (!element?.isConnected) return false;
+    const style = window.getComputedStyle?.(element);
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+    const rect = element.getBoundingClientRect?.();
+    return !!rect && rect.width > 0 && rect.height > 0;
+}
+
+function getOnboardingStepIndex(stepId = state.onboarding.stepId) {
+    return Math.max(0, getOnboardingSteps().findIndex(step => step.id === stepId));
+}
+
+function getCurrentOnboardingStep() {
+    const steps = getOnboardingSteps();
+    return steps.find(step => step.id === state.onboarding.stepId) || steps[0];
+}
+
+function getOnboardingTarget(step = getCurrentOnboardingStep()) {
+    if (!step?.target) return null;
+    const target = typeof step.target === 'function' ? step.target() : document.querySelector(step.target);
+    return target && isElementVisible(target) ? target : null;
+}
+
+function updateCreateDialogState() {
+    const selectedCount = state.createMemberAvatars.size;
+    const hasCharacters = characters.length > 0;
+    $('#cpgl_create_selected_count').text(`已选择 ${selectedCount} 位`);
+    $('#cpgl_create_group').prop('disabled', selectedCount === 0);
+    $('#cpgl_create_validation')
+        .toggleClass('is-ready', selectedCount > 0)
+        .text(
+            selectedCount > 0
+                ? `已选择 ${selectedCount} 位角色，可以创建。`
+                : hasCharacters
+                    ? '至少选择一位角色才能创建。'
+                    : '没有可用角色卡，请先在 SillyTavern 导入或创建角色。',
+        );
+    updateOnboardingControls();
+}
+
+function openCreateModal({ restoreDraft = state.onboarding.active, notify = true } = {}) {
+    if (restoreDraft) restoreOnboardingDraft();
+    renderManagerModal();
+    $('#cpgl_create_modal').css('display', 'flex');
+    updateCreateDialogState();
+    if (!state.onboarding.active) $('#cpgl_new_group_name').trigger('focus');
+    if (notify) {
+        requestAnimationFrame(() => notifyOnboardingEvent('create-modal-opened'));
+    }
+}
+
+function openHelpModal() {
+    state.helpPreviousFocus = document.activeElement;
+    $('#cpgl_help_modal').css('display', 'flex');
+    $('#cpgl_help_close').trigger('focus');
+}
+
+function closeHelpModal({ restoreFocus = true } = {}) {
+    $('#cpgl_help_modal').hide();
+    const previousFocus = state.helpPreviousFocus;
+    state.helpPreviousFocus = null;
+    if (restoreFocus && previousFocus?.isConnected && typeof previousFocus.focus === 'function') {
+        previousFocus.focus({ preventScroll: true });
+    }
+}
+
+function deleteCurrentGroup() {
+    const group = getCurrentGroup();
+    if (!group) {
+        toastr.warning('请先进入一个群聊。');
+        return false;
+    }
+    if (state.orchestrator.active || state.orchestrator.queue?.active || state.typing.length) {
+        toastr.warning('当前群仍在生成。请先停止队列，等待当前请求结束后再删除群聊。', 'ChatPulse Group Logic');
+        return false;
+    }
+    const confirmed = window.confirm(`确定删除群聊「${group.name || group.id}」吗？其中的消息、红包和摘要都会一起删除；当前页面会话中的该群调试记录也会清除。`);
+    if (!confirmed) return false;
+    const previousGroups = state.localGroups;
+    const previousActiveGroupId = state.activeGroupId;
+    state.localGroups = state.localGroups.filter(item => String(item.id) !== String(group.id));
+    state.activeGroupId = state.localGroups[0]?.id || null;
+    try {
+        saveLocalState();
+    } catch (error) {
+        state.localGroups = previousGroups;
+        state.activeGroupId = previousActiveGroupId;
+        toastr.error(`删除失败，浏览器无法保存数据：${error?.message || error}`, 'ChatPulse Group Logic');
+        return false;
+    }
+    state.debugLogsByGroup.delete(String(group.id || ''));
+    clearRuntimeState();
+    state.deleteMode = false;
+    state.selectedMessageIds.clear();
+    const onboardingRecord = readOnboardingRecord();
+    if (
+        ['active', 'paused'].includes(onboardingRecord.status)
+        && String(onboardingRecord.createdGroupId || '') === String(group.id)
+    ) {
+        writeOnboardingRecord({
+            status: state.onboarding.active ? 'active' : 'paused',
+            stepId: 'create',
+            createdGroupId: '',
+            draft: { name: '', personaAvatar: '', memberAvatars: [] },
+        });
+        state.onboarding.createdGroupId = '';
+        if (state.onboarding.active) state.onboarding.stepId = 'create';
+    }
+    $('#cpgl_manage_drawer').removeClass('is-open');
+    $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+    $('#cpgl_manage_scrim').hide();
+    renderManagerModal();
+    refreshStatus();
+    if (state.onboarding.active) renderOnboardingStep();
+    toastr.success(`已删除群聊「${group.name || group.id}」。`, 'ChatPulse Group Logic');
+    return true;
+}
+
+function startOnboarding({ force = false, resume = false } = {}) {
+    ensureOnboardingRoot();
+    let record = readOnboardingRecord();
+    if (force) {
+        record = writeOnboardingRecord(createDefaultOnboardingRecord());
+        closeHelpModal({ restoreFocus: false });
+        $('#cpgl_create_modal').hide();
+        $('#cpgl_new_group_name, #cpgl_create_search').val('');
+        state.createMemberAvatars.clear();
+        state.createUserPersonaAvatar = getDefaultUserPersonaAvatar();
+        $('#cpgl_manage_drawer').removeClass('is-open');
+        $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+        $('#cpgl_manage_scrim').hide();
+        $('#cpgl_manager_modal').hide();
+    }
+    let stepId = resume && ['active', 'paused'].includes(record.status) ? record.stepId : 'welcome';
+    let createdGroupId = record.createdGroupId || '';
+    const postCreationSteps = new Set(['composer', 'quick-tools', 'delete-messages', 'manage', 'manager-overview', 'help']);
+    if (postCreationSteps.has(stepId)) {
+        const createdGroup = createdGroupId ? getGroupById(createdGroupId) : null;
+        if (createdGroup) {
+            state.activeGroupId = createdGroup.id;
+            try {
+                saveLocalState();
+            } catch (error) {
+                console.warn('[ChatPulseGroupLogic] Failed to restore the onboarding group:', error);
+            }
+        } else {
+            stepId = 'create';
+            createdGroupId = '';
+            record = writeOnboardingRecord({
+                status: 'active',
+                stepId,
+                createdGroupId,
+            });
+        }
+    }
+    state.onboarding.active = true;
+    state.onboarding.stepId = stepId;
+    state.onboarding.createdGroupId = createdGroupId;
+    state.onboarding.previousFocus = document.activeElement;
+    writeOnboardingRecord({
+        status: 'active',
+        stepId,
+        createdGroupId: state.onboarding.createdGroupId,
+    });
+
+    const creationSteps = new Set(['create', 'name', 'persona', 'members', 'confirm']);
+    const inCenterSteps = new Set(['create', 'name', 'persona', 'members', 'confirm', 'composer', 'quick-tools', 'delete-messages', 'manage', 'manager-overview', 'help']);
+    if (inCenterSteps.has(stepId) && !$('#cpgl_manager_modal').is(':visible')) {
+        openGroupCenter();
+    }
+    if (creationSteps.has(stepId) && stepId !== 'create' && !$('#cpgl_create_modal').is(':visible')) {
+        openCreateModal({ restoreDraft: true, notify: false });
+    }
+    if (stepId === 'manager-overview') {
+        $('#cpgl_manage_drawer').addClass('is-open');
+        $('#cpgl_manage_toggle').attr('aria-expanded', 'true');
+        syncManageScrim();
+    }
+    renderOnboardingStep();
+}
+
+function isHostFirstRunOnboardingVisible() {
+    return [...document.querySelectorAll('.popup .onboarding')].some(element => {
+        const popup = element.closest('.popup') || element;
+        return isElementVisible(popup);
+    });
+}
+
+function maybeStartFirstRunOnboarding() {
+    if (state.onboarding.active || state.onboarding.autoPrompted) return;
+    if (isHostFirstRunOnboardingVisible()) {
+        if (state.onboarding.hostReadyTimer) clearTimeout(state.onboarding.hostReadyTimer);
+        state.onboarding.hostReadyTimer = window.setTimeout(maybeStartFirstRunOnboarding, 500);
+        return;
+    }
+    if (state.onboarding.hostReadyTimer) clearTimeout(state.onboarding.hostReadyTimer);
+    state.onboarding.hostReadyTimer = 0;
+    const record = readOnboardingRecord();
+    if (['completed', 'skipped', 'existing-user'].includes(record.status)) return;
+    if (['active', 'paused'].includes(record.status)) {
+        state.onboarding.autoPrompted = true;
+        startOnboarding({ resume: true });
+        return;
+    }
+    if (state.localGroups.length > 0) {
+        writeOnboardingRecord({ status: 'existing-user', stepId: 'welcome' });
+        return;
+    }
+    state.onboarding.autoPrompted = true;
+    startOnboarding();
+}
+
+function pauseOnboarding() {
+    if (!state.onboarding.active) return;
+    saveOnboardingDraft();
+    writeOnboardingRecord({
+        status: 'paused',
+        stepId: state.onboarding.stepId,
+        createdGroupId: state.onboarding.createdGroupId,
+    });
+    $('#cpgl_create_modal').hide();
+    $('#cpgl_manage_drawer').removeClass('is-open');
+    $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+    $('#cpgl_manage_scrim').hide();
+    hideOnboarding();
+}
+
+function skipOnboarding() {
+    if (!state.onboarding.active) return;
+    writeOnboardingRecord({
+        status: 'skipped',
+        stepId: state.onboarding.stepId,
+        createdGroupId: state.onboarding.createdGroupId,
+    });
+    hideOnboarding();
+    toastr.info('已跳过新手引导，可随时从帮助中心重新开始。', 'ChatPulse Group Logic');
+}
+
+function completeOnboarding() {
+    writeOnboardingRecord({
+        status: 'completed',
+        stepId: 'help',
+        createdGroupId: state.onboarding.createdGroupId,
+        draft: { name: '', personaAvatar: '', memberAvatars: [] },
+    });
+    hideOnboarding();
+    toastr.success('新手任务完成。现在可以开始群聊了！', 'ChatPulse Group Logic');
+}
+
+function hideOnboarding() {
+    state.onboarding.active = false;
+    if (state.onboarding.positionFrame) cancelAnimationFrame(state.onboarding.positionFrame);
+    state.onboarding.positionFrame = 0;
+    document.querySelectorAll('.cpgl-tour-target').forEach(element => element.classList.remove('cpgl-tour-target'));
+    document.querySelectorAll('[data-cpgl-tour-described="true"]').forEach(element => {
+        element.removeAttribute('data-cpgl-tour-described');
+        if (element.getAttribute('aria-describedby') === 'cpgl_tour_description') element.removeAttribute('aria-describedby');
+    });
+    $('#cpgl_tour_card').css('max-height', '');
+    $('#cpgl_tour_root').hide().attr('aria-hidden', 'true');
+    const previousFocus = state.onboarding.previousFocus;
+    if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') {
+        previousFocus.focus({ preventScroll: true });
+    }
+}
+
+function advanceOnboarding() {
+    if (!state.onboarding.active) return;
+    const steps = getOnboardingSteps();
+    const currentIndex = getOnboardingStepIndex();
+    const current = steps[currentIndex];
+    if (current.id === 'help') {
+        completeOnboarding();
+        return;
+    }
+    if (current.id === 'entry' && !getOnboardingTarget(current)) {
+        openGroupCenter();
+        return;
+    }
+    if (current.id === 'name' && !normalizeText($('#cpgl_new_group_name').val())) return;
+    if (current.id === 'members') {
+        if (!characters.length) {
+            skipOnboarding();
+            openHelpModal();
+            return;
+        }
+        if (!state.createMemberAvatars.size) return;
+    }
+    if (current.id === 'manager-overview' && !isCompactViewport()) {
+        $('#cpgl_manage_drawer').removeClass('is-open');
+        $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+        $('#cpgl_manage_scrim').hide();
+    }
+    let next = steps[Math.min(currentIndex + 1, steps.length - 1)];
+    if (next.id === 'entry' && $('#cpgl_manager_modal').is(':visible')) {
+        next = steps.find(step => step.id === 'create') || next;
+    }
+    state.onboarding.stepId = next.id;
+    saveOnboardingDraft();
+    writeOnboardingRecord({
+        status: 'active',
+        stepId: next.id,
+        createdGroupId: state.onboarding.createdGroupId,
+    });
+    renderOnboardingStep();
+}
+
+function notifyOnboardingEvent(eventName, payload = {}) {
+    if (!state.onboarding.active) {
+        const record = readOnboardingRecord();
+        if (eventName === 'center-opened' && record.status === 'paused') {
+            startOnboarding({ resume: true });
+            if (getCurrentOnboardingStep().waitFor === eventName) advanceOnboarding();
+        }
+        return;
+    }
+    const current = getCurrentOnboardingStep();
+    if (eventName === 'group-created' && payload.group) {
+        state.onboarding.createdGroupId = String(payload.group.id || '');
+        writeOnboardingRecord({
+            status: 'active',
+            stepId: 'composer',
+            createdGroupId: state.onboarding.createdGroupId,
+            draft: { name: '', personaAvatar: '', memberAvatars: [] },
+        });
+        state.onboarding.stepId = 'composer';
+        renderOnboardingStep();
+        return;
+    }
+    if (current.waitFor === eventName) advanceOnboarding();
+}
+
+function renderOnboardingStep() {
+    if (!state.onboarding.active) return;
+    ensureOnboardingRoot();
+    const steps = getOnboardingSteps();
+    const index = getOnboardingStepIndex();
+    const step = steps[index];
+    const root = $('#cpgl_tour_root');
+    root.show().attr('aria-hidden', 'false').attr('data-step', step.id);
+    $('#cpgl_tour_progress').text(`新手任务 ${index + 1} / ${steps.length}`);
+    $('#cpgl_tour_progress_bar').css('width', `${((index + 1) / steps.length) * 100}%`);
+    $('#cpgl_tour_kicker').text(step.kicker || '');
+    $('#cpgl_tour_title').text(step.title || '');
+    $('#cpgl_tour_description').html(step.description || '');
+    $('#cpgl_tour_callout').html(step.callout || '').toggle(!!step.callout);
+    $('#cpgl_tour_next').text(step.nextLabel || '下一步');
+    updateOnboardingControls();
+
+    const target = getOnboardingTarget(step);
+    document.querySelectorAll('.cpgl-tour-target').forEach(element => element.classList.remove('cpgl-tour-target'));
+    document.querySelectorAll('[data-cpgl-tour-described="true"]').forEach(element => {
+        element.removeAttribute('data-cpgl-tour-described');
+        if (element.getAttribute('aria-describedby') === 'cpgl_tour_description') element.removeAttribute('aria-describedby');
+    });
+    if (target) {
+        target.classList.add('cpgl-tour-target');
+        if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) {
+            target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+        }
+    }
+    scheduleOnboardingPosition();
+    requestAnimationFrame(() => {
+        const shouldFocusTarget = !!step.waitFor || ['name', 'persona', 'members', 'composer'].includes(step.id);
+        const focusTarget = shouldFocusTarget
+            ? (target?.matches?.('button, input, select, textarea, [tabindex]') ? target : target?.querySelector?.('button, input, select, textarea, [tabindex]'))
+            : null;
+        if (focusTarget) {
+            focusTarget.setAttribute('aria-describedby', 'cpgl_tour_description');
+            focusTarget.setAttribute('data-cpgl-tour-described', 'true');
+            focusTarget.focus?.({ preventScroll: true });
+        } else {
+            $('#cpgl_tour_card').trigger('focus');
+        }
+    });
+}
+
+function updateOnboardingControls() {
+    if (!state.onboarding.active) return;
+    const step = getCurrentOnboardingStep();
+    const target = getOnboardingTarget(step);
+    const targetLabel = limitText(normalizeText(
+        target?.getAttribute?.('aria-label')
+        || target?.getAttribute?.('title')
+        || target?.textContent
+        || step.title
+        || '当前控件',
+    ), 32);
+    let enabled = true;
+    if (step.id === 'name') enabled = !!normalizeText($('#cpgl_new_group_name').val());
+    if (step.id === 'members') enabled = characters.length === 0 || state.createMemberAvatars.size > 0;
+    const waitsForAction = !!step.waitFor;
+    const canOpenCenterFallback = step.id === 'entry' && !target;
+    $('#cpgl_tour_next')
+        .toggle(!waitsForAction || canOpenCenterFallback)
+        .text(canOpenCenterFallback ? '直接打开群聊中心' : (step.nextLabel || '下一步'))
+        .prop('disabled', !enabled);
+    $('#cpgl_tour_instruction')
+        .toggle(waitsForAction && !canOpenCenterFallback)
+        .text(waitsForAction ? `请操作“${targetLabel}”（点击，或聚焦后按 Enter / Space）` : '');
+    $('#cpgl_tour_retry').toggle(waitsForAction && !target && !canOpenCenterFallback);
+    scheduleOnboardingPosition();
+}
+
+function scheduleOnboardingPosition() {
+    if (!state.onboarding.active) return;
+    if (state.onboarding.positionFrame) cancelAnimationFrame(state.onboarding.positionFrame);
+    state.onboarding.positionFrame = requestAnimationFrame(() => {
+        state.onboarding.positionFrame = 0;
+        positionOnboarding();
+    });
+}
+
+function positionOnboarding() {
+    if (!state.onboarding.active) return;
+    const root = document.getElementById('cpgl_tour_root');
+    const card = document.getElementById('cpgl_tour_card');
+    const spotlight = document.getElementById('cpgl_tour_spotlight');
+    const arrow = document.getElementById('cpgl_tour_arrow');
+    const path = document.getElementById('cpgl_tour_arrow_path');
+    if (!root || !card || !spotlight || !arrow || !path) return;
+
+    const viewport = window.visualViewport;
+    const viewportRect = {
+        left: Number(viewport?.offsetLeft) || 0,
+        top: Number(viewport?.offsetTop) || 0,
+        width: Number(viewport?.width) || window.innerWidth || document.documentElement.clientWidth || 1,
+        height: Number(viewport?.height) || window.innerHeight || document.documentElement.clientHeight || 1,
+    };
+    const viewportRight = viewportRect.left + viewportRect.width;
+    const viewportBottom = viewportRect.top + viewportRect.height;
+    const target = getOnboardingTarget();
+    const isCompact = viewportRect.width <= 620;
+    root.classList.toggle('is-centered', !target);
+    root.classList.toggle('is-compact', isCompact);
+    card.style.width = isCompact ? `${Math.max(1, viewportRect.width - 24)}px` : '';
+    document.querySelectorAll('.cpgl-tour-target').forEach(element => {
+        if (element !== target) element.classList.remove('cpgl-tour-target');
+    });
+    target?.classList.add('cpgl-tour-target');
+
+    if (!target) {
+        spotlight.style.display = 'none';
+        arrow.style.display = 'none';
+        card.style.visibility = 'visible';
+        card.style.maxHeight = `${Math.max(180, viewportRect.height - 24)}px`;
+        card.style.left = `${viewportRect.left + viewportRect.width / 2}px`;
+        card.style.top = `${viewportRect.top + viewportRect.height / 2}px`;
+        card.style.transform = 'translate(-50%, -50%)';
+        return;
+    }
+
+    const rect = target.getBoundingClientRect();
+    const padding = 7;
+    const highlight = {
+        left: Math.max(viewportRect.left + 4, rect.left - padding),
+        top: Math.max(viewportRect.top + 4, rect.top - padding),
+        right: Math.min(viewportRight - 4, rect.right + padding),
+        bottom: Math.min(viewportBottom - 4, rect.bottom + padding),
+    };
+    spotlight.style.display = 'block';
+    spotlight.style.left = `${highlight.left}px`;
+    spotlight.style.top = `${highlight.top}px`;
+    spotlight.style.width = `${Math.max(1, highlight.right - highlight.left)}px`;
+    spotlight.style.height = `${Math.max(1, highlight.bottom - highlight.top)}px`;
+    spotlight.style.borderRadius = `${Math.min(18, Math.max(10, parseFloat(getComputedStyle(target).borderRadius) || 12))}px`;
+
+    card.style.transform = 'none';
+    card.style.visibility = 'hidden';
+    card.style.left = `${viewportRect.left + 12}px`;
+    card.style.top = `${viewportRect.top + 12}px`;
+    const gap = 24;
+    const margin = 12;
+    const roomAbove = highlight.top - viewportRect.top;
+    const roomBelow = viewportBottom - highlight.bottom;
+    card.style.maxHeight = isCompact
+        ? `${Math.max(180, Math.min(viewportRect.height - margin * 2, Math.max(roomAbove, roomBelow) - gap - margin))}px`
+        : `${Math.max(180, viewportRect.height - margin * 2)}px`;
+    const cardRect = card.getBoundingClientRect();
+    let left;
+    let top;
+    if (isCompact) {
+        left = viewportRect.left + margin;
+        top = roomAbove >= cardRect.height + gap || roomAbove > roomBelow
+            ? viewportRect.top + margin
+            : viewportBottom - cardRect.height - margin;
+    } else {
+        const room = {
+            bottom: viewportBottom - highlight.bottom,
+            top: highlight.top - viewportRect.top,
+            right: viewportRight - highlight.right,
+            left: highlight.left - viewportRect.left,
+        };
+        if (room.bottom >= cardRect.height + gap) {
+            left = rect.left + rect.width / 2 - cardRect.width / 2;
+            top = highlight.bottom + gap;
+        } else if (room.top >= cardRect.height + gap) {
+            left = rect.left + rect.width / 2 - cardRect.width / 2;
+            top = highlight.top - cardRect.height - gap;
+        } else if (room.right >= cardRect.width + gap) {
+            left = highlight.right + gap;
+            top = rect.top + rect.height / 2 - cardRect.height / 2;
+        } else {
+            left = highlight.left - cardRect.width - gap;
+            top = rect.top + rect.height / 2 - cardRect.height / 2;
+        }
+        left = Math.max(viewportRect.left + margin, Math.min(left, viewportRight - cardRect.width - margin));
+        top = Math.max(viewportRect.top + margin, Math.min(top, viewportBottom - cardRect.height - margin));
+    }
+    card.style.left = `${left}px`;
+    card.style.top = `${top}px`;
+    card.style.visibility = 'visible';
+
+    arrow.style.display = 'block';
+    arrow.setAttribute('viewBox', `${viewportRect.left} ${viewportRect.top} ${viewportRect.width} ${viewportRect.height}`);
+    arrow.setAttribute('width', `${viewportRect.width}`);
+    arrow.setAttribute('height', `${viewportRect.height}`);
+    arrow.style.left = `${viewportRect.left}px`;
+    arrow.style.top = `${viewportRect.top}px`;
+    const targetCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+    };
+    const cardCenter = {
+        x: left + cardRect.width / 2,
+        y: top + cardRect.height / 2,
+    };
+    const start = {
+        x: Math.max(left, Math.min(targetCenter.x, left + cardRect.width)),
+        y: Math.max(top, Math.min(targetCenter.y, top + cardRect.height)),
+    };
+    const control = {
+        x: (start.x + targetCenter.x) / 2 + (Math.abs(start.y - targetCenter.y) > Math.abs(start.x - targetCenter.x) ? 28 : 0),
+        y: (start.y + targetCenter.y) / 2 + (Math.abs(start.x - targetCenter.x) >= Math.abs(start.y - targetCenter.y) ? -24 : 0),
+    };
+    path.setAttribute('d', `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${targetCenter.x} ${targetCenter.y}`);
 }
 
 function describeElementForDebug(element) {
@@ -3267,22 +4397,68 @@ function bindManagerLiveEvents() {
     renderEmojiPicker();
     $(document)
         .off('.cpglManagerLive')
-        .on('click.cpglManagerLive', '#cpgl_manager_close', () => $('#cpgl_manager_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_manager_close', () => {
+            if (state.onboarding.active) pauseOnboarding();
+            $('#cpgl_manager_modal').hide();
+        })
         .on('click.cpglManagerLive', '#cpgl_group_list_toggle', event => {
             event.preventDefault();
             const modal = $('#cpgl_manager_modal');
-            const isCompactModal = modal.hasClass('cpgl-touch-modal') || !!window.matchMedia?.('(max-width: 620px)')?.matches;
+            const isCompactModal = modal.hasClass('cpgl-touch-modal') || isCompactViewport();
             if (isCompactModal) {
                 modal.toggleClass('cpgl-show-group-list');
+                const expanded = modal.hasClass('cpgl-show-group-list');
+                $('#cpgl_group_list_toggle').attr('aria-expanded', String(expanded));
+            } else {
+                modal.toggleClass('cpgl-hide-group-list');
+                $('#cpgl_group_list_toggle').attr('aria-expanded', String(!modal.hasClass('cpgl-hide-group-list')));
             }
+            scheduleOnboardingPosition();
         })
-        .on('click.cpglManagerLive', '#cpgl_show_create, #cpgl_mobile_create_group, #cpgl_empty_create_group', () => $('#cpgl_create_modal').css('display', 'flex'))
-        .on('click.cpglManagerLive', '#cpgl_header_delete_messages', () => {
+        .on('click.cpglManagerLive', '#cpgl_mobile_back_to_groups', event => {
+            event.preventDefault();
+            $('#cpgl_manager_modal').addClass('cpgl-show-group-list').removeClass('cpgl-hide-group-list');
+            $('#cpgl_group_list_toggle').attr('aria-expanded', 'true');
+            scheduleOnboardingPosition();
+        })
+        .on('input.cpglManagerLive', '#cpgl_group_search', () => {
+            renderManagerModal();
+        })
+        .on('click.cpglManagerLive', '#cpgl_show_create, #cpgl_mobile_create_group, #cpgl_empty_create_group', () => {
+            openCreateModal();
+        })
+        .on('click.cpglManagerLive', '#cpgl_help_button, #cpgl_empty_open_help, #cpgl_mobile_open_help', event => {
+            if (event.currentTarget.id === 'cpgl_mobile_open_help') {
+                $('#cpgl_manage_drawer').removeClass('is-open');
+                $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+                $('#cpgl_manage_scrim').hide();
+            }
+            if (state.onboarding.active && state.onboarding.stepId === 'help') completeOnboarding();
+            openHelpModal();
+        })
+        .on('click.cpglManagerLive', '#cpgl_help_close', closeHelpModal)
+        .on('click.cpglManagerLive', '#cpgl_help_modal', event => {
+            if (event.target.id === 'cpgl_help_modal') closeHelpModal();
+        })
+        .on('click.cpglManagerLive', '#cpgl_help_restart_tour', () => startOnboarding({ force: true }))
+        .on('click.cpglManagerLive', '#cpgl_tour_skip', skipOnboarding)
+        .on('click.cpglManagerLive', '#cpgl_tour_next', advanceOnboarding)
+        .on('click.cpglManagerLive', '#cpgl_tour_retry', renderOnboardingStep)
+        .on('click.cpglManagerLive', '.cpgl-drawer-jump-nav button', event => {
+            const target = document.querySelector(event.currentTarget.dataset.target || '');
+            target?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+        })
+        .on('click.cpglManagerLive', '#cpgl_header_delete_messages, #cpgl_mobile_delete_messages', event => {
             if (!getCurrentGroup()) {
                 toastr.warning('请先进入一个群聊。');
                 return;
             }
             setDeleteMode(!state.deleteMode);
+            if (event.currentTarget.id === 'cpgl_mobile_delete_messages') {
+                $('#cpgl_manage_drawer').removeClass('is-open');
+                $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+                $('#cpgl_manage_scrim').hide();
+            }
         })
         .on('click.cpglManagerLive', '#cpgl_chat_messages .cpgl-message-select', event => {
             event.preventDefault();
@@ -3315,13 +4491,27 @@ function bindManagerLiveEvents() {
             renderManagerModal();
             toastr.success(`已删除 ${deleted} 条对话记录。`, 'ChatPulse Group Logic');
         })
-        .on('click.cpglManagerLive', '#cpgl_create_modal_close', () => $('#cpgl_create_modal').hide())
+        .on('click.cpglManagerLive', '#cpgl_create_modal_close', () => {
+            saveOnboardingDraft();
+            $('#cpgl_create_modal').hide();
+            if (state.onboarding.active && ['name', 'persona', 'members', 'confirm'].includes(state.onboarding.stepId)) {
+                state.onboarding.stepId = 'create';
+                writeOnboardingRecord({ status: 'active', stepId: 'create' });
+                renderOnboardingStep();
+            }
+        })
         .on('click.cpglManagerLive', '#cpgl_create_modal', event => {
-            if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal').hide();
+            if (event.target.id === 'cpgl_create_modal') $('#cpgl_create_modal_close').trigger('click');
         })
         .on('input.cpglManagerLive', '#cpgl_create_search', renderManagerModal)
+        .on('input.cpglManagerLive', '#cpgl_new_group_name', () => {
+            saveOnboardingDraft();
+            updateOnboardingControls();
+        })
         .on('change.cpglManagerLive', '#cpgl_new_user_persona', event => {
             state.createUserPersonaAvatar = String(event.target.value || '');
+            saveOnboardingDraft();
+            updateOnboardingControls();
         })
         .on('change.cpglManagerLive', '#cpgl_create_members input[type="checkbox"]', event => {
             if (event.target.checked) {
@@ -3329,9 +4519,31 @@ function bindManagerLiveEvents() {
             } else {
                 state.createMemberAvatars.delete(event.target.value);
             }
+            $(event.target).closest('.cpgl-member-option')
+                .toggleClass('is-selected', event.target.checked)
+                .find('i')
+                .text(event.target.checked ? '✓' : '');
+            saveOnboardingDraft();
+            updateCreateDialogState();
         })
-        .on('click.cpglManagerLive', '#cpgl_manage_toggle', () => $('#cpgl_manage_drawer').toggleClass('is-open'))
-        .on('click.cpglManagerLive', '#cpgl_manage_close', () => $('#cpgl_manage_drawer').removeClass('is-open'))
+        .on('click.cpglManagerLive', '#cpgl_manage_toggle', () => {
+            const drawer = $('#cpgl_manage_drawer');
+            drawer.toggleClass('is-open');
+            const expanded = drawer.hasClass('is-open');
+            $('#cpgl_manage_toggle').attr('aria-expanded', String(expanded));
+            syncManageScrim();
+            if (expanded) {
+                notifyOnboardingEvent('manage-opened');
+                if (!state.onboarding.active) requestAnimationFrame(() => $('#cpgl_manage_close').trigger('focus'));
+            }
+            scheduleOnboardingPosition();
+        })
+        .on('click.cpglManagerLive', '#cpgl_manage_close, #cpgl_manage_scrim', () => {
+            $('#cpgl_manage_drawer').removeClass('is-open');
+            $('#cpgl_manage_toggle').attr('aria-expanded', 'false');
+            $('#cpgl_manage_scrim').hide();
+            scheduleOnboardingPosition();
+        })
         .on('click.cpglManagerLive', '#cpgl_emoji_toggle', () => {
             hideMentionMenu();
             $('#cpgl_emoji_picker').toggle();
@@ -3503,7 +4715,12 @@ function bindManagerLiveEvents() {
             if (!group) return;
             normalizeGroupMemory(group);
             group.memoryPermissions.allowPrivateMemoryInGroup = event.target.checked;
+            if (event.target.checked && Number(group.injectLimit) <= 0) {
+                group.injectLimit = DEFAULT_CROSS_CHAT_RAW_LIMIT;
+                toastr.info(`已自动把跨聊原文条数设为 ${DEFAULT_CROSS_CHAT_RAW_LIMIT}。`, 'ChatPulse Group Logic');
+            }
             saveLocalState();
+            renderManagerModal();
             renderMemoryPanel();
         })
         .on('change.cpglManagerLive', '#cpgl_allow_other_group_memory', event => {
@@ -3511,7 +4728,12 @@ function bindManagerLiveEvents() {
             if (!group) return;
             normalizeGroupMemory(group);
             group.memoryPermissions.allowOtherGroupMemoryInGroup = event.target.checked;
+            if (event.target.checked && Number(group.injectLimit) <= 0) {
+                group.injectLimit = DEFAULT_CROSS_CHAT_RAW_LIMIT;
+                toastr.info(`已自动把跨聊原文条数设为 ${DEFAULT_CROSS_CHAT_RAW_LIMIT}。`, 'ChatPulse Group Logic');
+            }
             saveLocalState();
+            renderManagerModal();
             renderMemoryPanel();
         })
         .on('input.cpglManagerLive', '#cpgl_api_base_delay', event => {
@@ -3629,18 +4851,18 @@ function bindManagerLiveEvents() {
             if (!confirmed) return;
             group.messages = [];
             group.redPackets = [];
-            group.debugLogs = [];
+            state.debugLogsByGroup.delete(String(group.id || ''));
             group.memory = getDefaultGroupMemory();
             clearRuntimeState();
             saveLocalState();
             renderManagerModal();
             toastr.success('对话记录已删除。', 'ChatPulse Group Logic');
         })
+        .on('click.cpglManagerLive', '#cpgl_delete_group_danger', deleteCurrentGroup)
         .on('click.cpglManagerLive', '#cpgl_clear_debug_logs', () => {
             const group = getCurrentGroup();
             if (!group) return;
-            group.debugLogs = [];
-            saveLocalState();
+            state.debugLogsByGroup.delete(String(group.id || ''));
             renderDebugLogs();
             toastr.info('调试记录已清空。', 'ChatPulse Group Logic');
         })
@@ -3690,19 +4912,24 @@ function bindManagerLiveEvents() {
             toastr.info('当前角色结果返回后会被跳过。', 'ChatPulse Group Logic');
         })
         .on('click.cpglManagerLive', '#cpgl_manager_modal', event => {
-            if (event.target.id === 'cpgl_manager_modal') $('#cpgl_manager_modal').hide();
+            if (event.target.id !== 'cpgl_manager_modal') return;
+            if (state.onboarding.active) pauseOnboarding();
+            $('#cpgl_manager_modal').hide();
         })
         .on('click.cpglManagerLive', '#cpgl_create_group', async () => {
             try {
                 const avatars = [...state.createMemberAvatars];
                 const userPersonaAvatar = String($('#cpgl_new_user_persona').val() || state.createUserPersonaAvatar || '');
-                await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars, userPersonaAvatar);
+                const createdGroup = await createStGroup(String($('#cpgl_new_group_name').val() || ''), avatars, userPersonaAvatar);
                 $('#cpgl_new_group_name').val('');
                 $('#cpgl_create_search').val('');
                 state.createMemberAvatars.clear();
+                state.createUserPersonaAvatar = getDefaultUserPersonaAvatar();
                 $('#cpgl_create_modal').hide();
                 renderManagerModal();
                 refreshStatus();
+                toastr.success(`群聊「${createdGroup.name}」已创建。`, 'ChatPulse Group Logic');
+                notifyOnboardingEvent('group-created', { group: createdGroup });
             } catch (error) {
                 toastr.error(error.message || String(error), 'ChatPulse Group Logic');
             }
@@ -3760,8 +4987,9 @@ function bindManagerLiveEvents() {
             $('#cpgl_redpacket_modal').hide();
             toastr.success('红包已发到群聊。', 'ChatPulse Group Logic');
             if (createdPacket) {
+                const sourceGroupId = String(group.id);
                 setTimeout(() => {
-                    runRedPacketReactionRound(createdPacket);
+                    runRedPacketReactionRound(createdPacket, sourceGroupId);
                 }, 500);
             }
         })
@@ -3779,12 +5007,14 @@ function bindManagerLiveEvents() {
         .on('click.cpglManagerLive', '#cpgl_entry_send', () => {
             const text = $('#cpgl_entry_text').val();
             $('#cpgl_entry_text').val('');
+            syncComposerState();
             hideMentionMenu();
             hideEmojiPicker();
             runOrchestratedRound(text);
         })
         .on('input.cpglManagerLive click.cpglManagerLive keyup.cpglManagerLive', '#cpgl_entry_text', event => {
             if (event.type === 'keyup' && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) return;
+            syncComposerState(event.currentTarget);
             updateMentionMenuFromInput(event.currentTarget);
         })
         .on('keydown.cpglManagerLive', '#cpgl_entry_text', event => {
@@ -3842,25 +5072,47 @@ function renderChatMessages() {
     const group = getCurrentGroup();
     if (!group) {
         $('#cpgl_chat_title').text('选择或创建一个群聊');
-        $('#cpgl_chat_subtitle').text('左侧创建群聊，或进入已有群聊。');
+        $('#cpgl_chat_subtitle').text('每个群都能使用独立成员、User 人设与长期记忆。');
         $('#cpgl_chat_messages').html(`
-            <div class="cpgl-empty-state">
-                <div class="cpgl-empty-icon">群</div>
-                <p>从这里开始一个群聊</p>
-                <span>左侧点 ＋ 发起群聊，或者进入已有群聊。</span>
-                <button id="cpgl_empty_create_group" class="menu_button cpgl-empty-action" type="button">发起群聊</button>
+            <div class="cpgl-empty-state cpgl-empty-welcome">
+                <div class="cpgl-empty-orbit" aria-hidden="true">
+                    <i class="fa-solid fa-comments"></i>
+                </div>
+                <span class="cpgl-empty-eyebrow">第一次使用 · 约 1 分钟</span>
+                <h2>创建一个只属于你的群聊</h2>
+                <p>选择角色卡和你的 User 人设，ChatPulse 会把消息、红包与记忆分别保存在这个群里。</p>
+                <div class="cpgl-empty-steps" aria-label="创建群聊的三个步骤">
+                    <div><b>1</b><span><strong>起个群名</strong><small>方便区分不同剧情</small></span></div>
+                    <div><b>2</b><span><strong>选择身份</strong><small>绑定本群 User 人设</small></span></div>
+                    <div><b>3</b><span><strong>邀请角色</strong><small>至少选择一位成员</small></span></div>
+                </div>
+                <div class="cpgl-empty-actions">
+                    <button id="cpgl_empty_create_group" class="cpgl-send-button cpgl-empty-action" type="button">
+                        发起群聊 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                    </button>
+                    <button id="cpgl_empty_open_help" class="cpgl-empty-help" type="button">先看看完整使用说明</button>
+                </div>
             </div>`);
         return;
     }
 
-    $('#cpgl_chat_title').text(group.name || group.id);
-    $('#cpgl_chat_subtitle').text(`${(group.members || []).length} 个成员 | User: ${getGroupUserName(group)} | 无 @ 随机轮询，@角色 点名优先`);
+    const memberCount = (group.members || []).length;
+    $('#cpgl_chat_title').text(`${group.name || group.id}${memberCount ? ` (${memberCount})` : ''}`);
+    $('#cpgl_chat_subtitle').text(`User: ${getGroupUserName(group)} · 无 @ 随机轮询，@角色 点名优先`);
+    let lastDisplayedTimestamp = 0;
     const rows = getRecentVisibleMessages(80).map(message => {
         const messageId = getLocalMessageId(message, message._index);
         const selected = state.selectedMessageIds.has(messageId);
+        const messageTimestamp = getMessageTimestamp(message);
+        const showTime = messageTimestamp
+            && (!lastDisplayedTimestamp || Math.abs(messageTimestamp - lastDisplayedTimestamp) >= 5 * 60 * 1000);
+        if (showTime) lastDisplayedTimestamp = messageTimestamp;
+        const timeMarker = showTime
+            ? `<time class="cpgl-message-time" datetime="${escapeHtml(new Date(messageTimestamp).toISOString())}">${escapeHtml(formatMessageTime(messageTimestamp))}</time>`
+            : '';
         if (message.is_system) {
             const systemText = stripTags(message.mes).replace(/^\[System\]\s*/i, '').trim();
-            return systemText ? `
+            return systemText ? `${timeMarker}
                 <div class="cpgl-system-delete-row ${state.deleteMode ? 'delete-mode' : ''} ${selected ? 'selected' : ''}" data-message-id="${escapeHtml(messageId)}">
                     ${messageSelectControl(messageId)}
                     <div class="cpgl-system-message">${escapeHtml(systemText)}</div>
@@ -3876,9 +5128,10 @@ function renderChatMessages() {
         if (!content && !packet) return '';
         const bubble = packet ? renderRedPacketCard(packet, isUser) : `<div class="cpgl-message-bubble">${escapeHtml(content)}</div>`;
         return `
+            ${timeMarker}
             <div class="cpgl-message-wrapper ${isUser ? 'user' : 'character'} ${state.deleteMode ? 'delete-mode' : ''} ${selected ? 'selected' : ''}" data-message-id="${escapeHtml(messageId)}">
                 ${messageSelectControl(messageId)}
-                <div class="cpgl-message-avatar"><img src="${escapeHtml(avatarUrl)}" alt=""></div>
+                <div class="cpgl-message-avatar"><img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(speaker)}"></div>
                 <div class="cpgl-message-content">
                     ${isUser ? '' : `<div class="cpgl-message-name">${escapeHtml(speaker)}</div>`}
                     ${bubble}
@@ -3888,7 +5141,7 @@ function renderChatMessages() {
 
     $('#cpgl_chat_messages').html(rows || `
         <div class="cpgl-empty-state">
-            <div class="cpgl-empty-icon">群</div>
+            <div class="cpgl-empty-icon"><i class="fa-solid fa-comments" aria-hidden="true"></i></div>
             <p>${escapeHtml(group.name || '这个群聊')} 还没有消息</p>
             <span>在下方输入第一条消息。</span>
         </div>`);
@@ -3911,13 +5164,13 @@ function renderRedPacketCard(packet, isUser = false) {
     return `
         <div class="cpgl-redpacket-message-card" data-packet-id="${escapeHtml(packet.id)}">
             <div class="cpgl-redpacket-message-main">
-                <span class="cpgl-redpacket-message-icon">🧧</span>
+                <span class="cpgl-redpacket-message-icon"><i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i></span>
                 <div>
                     <strong>${escapeHtml(packet.note || '红包')}</strong>
                     <span>${packet.mode === 'equal' ? '普通红包' : '拼手气红包'} · ${claimed}/${packet.count}</span>
                 </div>
             </div>
-            ${canClaim ? `<button class="cpgl-redpacket-open cpgl-claim-packet" type="button" data-packet-id="${escapeHtml(packet.id)}">🧧 拆红包</button>` : ''}
+            ${canClaim ? `<button class="cpgl-redpacket-open cpgl-claim-packet" type="button" data-packet-id="${escapeHtml(packet.id)}"><i class="fa-solid fa-envelope-open" aria-hidden="true"></i> 拆红包</button>` : ''}
             ${isExpired || userClaimed || isUser ? `<div class="cpgl-redpacket-status">${userClaimed ? '✅ 已领取' : isExpired ? '已抢完' : '等待群友领取'}</div>` : ''}
             <details class="cpgl-redpacket-detail">
                 <summary>领取记录 · ¥${Number(packet.total || 0).toFixed(2)} 总计</summary>
@@ -3988,6 +5241,10 @@ function renderMemoryPanel() {
     $('#cpgl_allow_other_group_memory').prop('checked', !!group.memoryPermissions.allowOtherGroupMemoryInGroup);
     $('#cpgl_memory_status').text([
         memory.enabled ? '已启用' : '已关闭',
+        getGroupUserPersonaAvatar(group)
+            ? `User persona：${getGroupUserName(group)}（跨聊严格隔离）`
+            : `User：${getGroupUserName(group)}（无明确 persona，跨聊关闭）`,
+        `跨聊原文 ${Math.max(0, Number(group.injectLimit) || 0)} 条`,
         `已总结到第 ${status.cursor} 条`,
         `当前 ${status.total} 条`,
         `窗口外未摘要 ${status.pending}/${status.threshold} 条`,
@@ -4060,7 +5317,7 @@ function renderTypingIndicator() {
     }
     const names = state.typing.map(item => item.name).join('、');
     $('#cpgl_typing_indicator')
-        .html(`<span>✨</span><div>${escapeHtml(names)} 正在思考...</div><button id="cpgl_interrupt_generation" type="button">打断</button>`)
+        .html(`<span><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></span><div>${escapeHtml(names)} 正在输入…</div><button id="cpgl_interrupt_generation" type="button">停止</button>`)
         .css('display', 'flex');
 }
 
@@ -4073,13 +5330,26 @@ function openGroupCenter() {
     loadLocalState();
     renderManagerModal();
     syncVisibleViewportModal();
-    $('#cpgl_manager_modal').removeClass('cpgl-show-group-list').css('display', 'flex');
+    const compactViewport = isCompactViewport();
+    $('#cpgl_manager_modal')
+        .removeClass('cpgl-show-group-list cpgl-hide-group-list')
+        .toggleClass('cpgl-show-group-list', compactViewport)
+        .css('display', 'flex');
+    $('#cpgl_group_list_toggle').attr('aria-expanded', 'true');
     recordCpglDebug('openGroupCenter.done');
+    requestAnimationFrame(() => {
+        notifyOnboardingEvent('center-opened');
+        scheduleOnboardingPosition();
+    });
 }
 
 async function openGroupConversation(groupId) {
     await openManagedGroup(groupId);
     $('#cpgl_manager_modal').removeClass('cpgl-show-group-list');
+    $('#cpgl_group_list_toggle').attr(
+        'aria-expanded',
+        String(!isCompactViewport() && !$('#cpgl_manager_modal').hasClass('cpgl-hide-group-list')),
+    );
     renderManagerModal();
 }
 
@@ -4132,7 +5402,7 @@ function bindNativeOpenEntrypoints() {
 }
 
 function shouldUseVisibleViewportModal() {
-    return !!window.visualViewport && isTouchViewport();
+    return !!window.visualViewport && isCompactViewport();
 }
 
 function isTouchViewport() {
@@ -4140,11 +5410,17 @@ function isTouchViewport() {
         && window.matchMedia('(pointer: coarse)').matches;
     const touchPoints = Number(navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0) > 0;
     const touchEvent = 'ontouchstart' in window;
-    const viewport = window.visualViewport;
-    const narrowVisibleViewport = viewport
-        ? Math.min(viewport.width || 0, viewport.height || 0) <= 900
-        : false;
-    return coarsePointer || touchPoints || touchEvent || narrowVisibleViewport;
+    return coarsePointer || touchPoints || touchEvent;
+}
+
+function isCompactViewport() {
+    const width = Number(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    return width <= 620 || !!window.matchMedia?.('(max-width: 620px)')?.matches;
+}
+
+function syncManageScrim() {
+    const width = Number(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    $('#cpgl_manage_scrim').toggle($('#cpgl_manage_drawer').hasClass('is-open') && width <= 1100);
 }
 
 function clearVisibleViewportModal() {
@@ -4169,21 +5445,20 @@ function syncVisibleViewportModal() {
     if (!modal) return;
     if (!shouldUseVisibleViewportModal()) {
         clearVisibleViewportModal();
+        $('#cpgl_group_list_toggle').attr('aria-expanded', String(!$('#cpgl_manager_modal').hasClass('cpgl-hide-group-list')));
+        syncManageScrim();
         return;
     }
     const viewport = window.visualViewport;
     const width = Number(viewport.width || window.innerWidth || document.documentElement.clientWidth || 0);
     const height = Number(viewport.height || window.innerHeight || document.documentElement.clientHeight || 0);
     const scale = Number(viewport.scale || 1);
-    const desktopScaledTouch = width > 620 && isTouchViewport();
-    const desiredShellWidth = desktopScaledTouch
-        ? Math.max(320, width - 16)
-        : Math.min(Math.max(320, width - 16), Math.max(320, 430 / Math.max(scale, 0.4)));
-    const desiredShellHeight = desktopScaledTouch
-        ? Math.max(520, height - 16)
-        : Math.min(Math.max(520, height - 16), Math.max(520, 720 / Math.max(scale, 0.4)));
+    const compactLayout = isCompactViewport();
+    const desiredShellWidth = Math.max(280, width - 16);
+    const desiredShellHeight = Math.max(360, height - 16);
     modal.classList.add('cpgl-visual-viewport');
-    modal.classList.add('cpgl-touch-modal');
+    modal.classList.toggle('cpgl-touch-modal', compactLayout);
+    $('#cpgl_group_list_toggle').attr('aria-expanded', String(modal.classList.contains('cpgl-show-group-list')));
     modal.dataset.cpglViewport = [
         `touch=${isTouchViewport() ? '1' : '0'}`,
         `vv=${Math.round(viewport.width || 0)}x${Math.round(viewport.height || 0)}`,
@@ -4201,10 +5476,12 @@ function syncVisibleViewportModal() {
     modal.style.bottom = 'auto';
     modal.style.setProperty('--cpgl-touch-shell-width', `${desiredShellWidth}px`);
     modal.style.setProperty('--cpgl-touch-shell-height', `${desiredShellHeight}px`);
+    syncManageScrim();
     recordCpglDebug('syncVisibleViewportModal', {
         shellWidth: Math.round(desiredShellWidth),
         shellHeight: Math.round(desiredShellHeight),
     });
+    scheduleOnboardingPosition();
 }
 
 function userPersonaOptionsHtml(selectedAvatar = '') {
@@ -4230,29 +5507,62 @@ function renderUserPersonaSelect(selector, selectedAvatar = '') {
 
 function renderManagerModal() {
     if (!$('#cpgl_manager_modal').length) return;
+    const groupSearch = normalizeText($('#cpgl_group_search').val()).toLowerCase();
     const createSearch = String($('#cpgl_create_search').val() || '').toLowerCase();
     const createCandidates = characters.filter(character => (character.name || character.avatar || '').toLowerCase().includes(createSearch));
-    $('#cpgl_create_members').html(createCandidates.map(character => characterOptionHtml(character, state.createMemberAvatars.has(character.avatar))).join(''));
+    const createMemberRows = createCandidates
+        .map(character => characterOptionHtml(character, state.createMemberAvatars.has(character.avatar)))
+        .join('');
+    const createEmptyText = characters.length
+        ? '没有找到匹配的角色，试试其他关键词。'
+        : '还没有角色卡。请先返回 SillyTavern 导入或创建角色。';
+    $('#cpgl_create_members').html(createMemberRows || `<div class="cpgl-create-empty">${escapeHtml(createEmptyText)}</div>`);
     state.createUserPersonaAvatar = renderUserPersonaSelect(
         '#cpgl_new_user_persona',
         String($('#cpgl_new_user_persona').val() || state.createUserPersonaAvatar || getDefaultUserPersonaAvatar()),
     );
 
-    const groupRows = state.localGroups.map(group => {
+    const visibleGroups = state.localGroups.filter(group => {
+        if (!groupSearch) return true;
+        const memberNames = (group.members || [])
+            .map(avatar => getCharacterByAvatar(avatar)?.name || avatar)
+            .join(' ');
+        return `${group.name || group.id} ${getGroupUserName(group)} ${memberNames}`.toLowerCase().includes(groupSearch);
+    });
+    const groupRows = visibleGroups.map(group => {
         const firstMember = getCharacterByAvatar((group.members || [])[0]);
         const names = (group.members || []).map(avatar => getCharacterByAvatar(avatar)?.name || avatar).join('、');
         const isActive = getCurrentGroup()?.id === group.id;
         const userName = getGroupUserName(group);
+        const memberCount = (group.members || []).length;
+        const latestMessage = [...(group.messages || [])].reverse().find(message => message && normalizeText(message.mes));
+        const latestSpeaker = latestMessage && !latestMessage.is_system
+            ? (latestMessage.is_user ? '我' : getMessageSpeaker(latestMessage))
+            : '';
+        const latestContent = latestMessage ? getMessagePreview(latestMessage, group) : '';
+        const preview = latestContent
+            ? `${latestSpeaker ? `${latestSpeaker}: ` : ''}${latestContent}`
+            : `以 ${userName} 身份 · ${names || '暂无成员'}`;
+        const lastMessageTime = latestMessage ? formatMessageTime(getMessageTimestamp(latestMessage)) : '';
         return `
-            <button class="cpgl-chat-list-item cpgl-open-group ${isActive ? 'active' : ''}" type="button" data-group-id="${escapeHtml(group.id)}">
+            <button class="cpgl-chat-list-item cpgl-open-group ${isActive ? 'active' : ''}" type="button" data-group-id="${escapeHtml(group.id)}" ${isActive ? 'aria-current="true"' : ''}>
                 <img src="${escapeHtml(getCharacterAvatarUrl(firstMember))}" alt="">
-                <div>
-                    <strong>${escapeHtml(group.name || group.id)}</strong>
-                    <span>${escapeHtml(`User: ${userName} | ${names || '无成员'}`)}</span>
+                <div class="cpgl-chat-list-copy">
+                    <div class="cpgl-chat-list-title">
+                        <strong>${escapeHtml(group.name || group.id)}</strong>
+                        <time>${escapeHtml(lastMessageTime)}</time>
+                    </div>
+                    <div class="cpgl-chat-list-preview">
+                        <span>${escapeHtml(preview)}</span>
+                        <em>${memberCount}</em>
+                    </div>
                 </div>
             </button>`;
     }).join('');
-    $('#cpgl_group_list').html(groupRows || '<div class="cpgl-list-empty">还没有群聊。</div>');
+    const emptyListText = state.localGroups.length && groupSearch ? '没有匹配的群聊。' : '还没有群聊。';
+    $('#cpgl_group_list').html(groupRows || `<div class="cpgl-list-empty">${escapeHtml(emptyListText)}</div>`);
+    $('#cpgl_group_count_badge').text(state.localGroups.length > 99 ? '99+' : String(state.localGroups.length));
+    $('#cpgl_group_list_toggle').attr('aria-label', `打开或关闭群聊列表，共 ${state.localGroups.length} 个群聊`);
 
     const group = getCurrentGroup();
     if (!group) {
@@ -4270,6 +5580,8 @@ function renderManagerModal() {
         renderWorldInfoPanel();
         renderMemoryPanel();
         renderQueuePanel();
+        updateCreateDialogState();
+        scheduleOnboardingPosition();
         return;
     }
     $('#cpgl_group_name_input').val(group.name || '');
@@ -4279,7 +5591,7 @@ function renderManagerModal() {
     $('#cpgl_group_user_persona_hint').text(
         groupPersona.avatar
             ? `本群用户消息、红包和提示词会使用「${groupPersona.name}」。`
-            : '没有可用 persona 时，会回退到 ST 当前用户。',
+            : '没有可用 persona 时使用 ST 当前用户名显示；跨聊记忆保持关闭。',
     );
     $('#cpgl_member_count').text(`(${(group.members || []).length})`);
     $('#cpgl_drawer_no_chain').prop('checked', !!group.noChain);
@@ -4326,6 +5638,8 @@ function renderManagerModal() {
     renderWorldInfoPanel();
     renderMemoryPanel();
     renderQueuePanel();
+    updateCreateDialogState();
+    scheduleOnboardingPosition();
 }
 
 function updatePacketPreview() {
@@ -4365,19 +5679,20 @@ function renderRedPacketList() {
 function renderDebugLogs() {
     if (!$('#cpgl_debug_logs').length) return;
     const group = getCurrentGroup();
-    const logs = (group?.debugLogs || []).slice().reverse();
+    const logs = (state.debugLogsByGroup.get(String(group?.id || '')) || []).slice().reverse();
     const html = logs.map(log => `
         <details class="cpgl-debug-item">
-            <summary>${escapeHtml(log.character || 'unknown')} · ${new Date(log.at || Date.now()).toLocaleTimeString()}${log.retried ? ' · retry' : ''}</summary>
+            <summary>${escapeHtml(log.character || 'unknown')} · ${new Date(log.at || Date.now()).toLocaleTimeString()}${log.retried ? ' · retry' : ''}${log.error ? ' · failed' : ''}</summary>
             <label>Prompt</label>
             <pre>${escapeHtml(log.prompt || '')}</pre>
             <label>Raw Output</label>
             <pre>${escapeHtml(log.raw || '')}</pre>
             <label>Sanitized</label>
             <pre>${escapeHtml(log.sanitized || '')}</pre>
+            ${log.error ? `<label>Error</label><pre>${escapeHtml(log.error)}</pre>` : ''}
         </details>
     `).join('');
-    $('#cpgl_debug_logs').html(html || '<div class="cpgl-hint">还没有新的输入输出记录。之后每次生成都会记录。</div>');
+    $('#cpgl_debug_logs').html(html || '<div class="cpgl-hint">还没有新的输入输出记录。成功或失败的生成都会记录在本次页面会话里。</div>');
 }
 
 function renderWorldInfoPanel() {
@@ -4409,7 +5724,7 @@ function renderWorldInfoPanel() {
             <span>${escapeHtml(name)}</span>
         </label>
     `).join('');
-    $('#cpgl_world_info_books').html(rows || '<div class="cpgl-hint">没有可用世界书。</div>');
+    $('#cpgl_world_info_books').html(rows || '<div class="cpgl-hint">没有可用世界书；可直接群聊，不影响角色卡生效。</div>');
 
     const modeText = group.includeCharacterWorldInfo === false ? '只读上面选中的世界书' : '会叠加成员角色卡世界书';
     const missingText = missingNames.length
@@ -4440,12 +5755,24 @@ function deleteSelectedMessagesFromGroup(group, selectedIds) {
     group.redPackets = (group.redPackets || [])
         .filter(packet => !deletedPacketIds.has(packet.id) && oldIndexToNewIndex.has(packet.sourceMessageId))
         .map(packet => ({ ...packet, sourceMessageId: oldIndexToNewIndex.get(packet.sourceMessageId) }));
-    return oldMessages.length - keptMessages.length;
+    const deletedCount = oldMessages.length - keptMessages.length;
+    if (deletedCount > 0) {
+        // Existing summaries refer to old message indices/content and can no
+        // longer be trusted after selective deletion.
+        const memory = normalizeGroupMemory(group);
+        memory.cursor = 0;
+        memory.rounds = [];
+        memory.lastError = '';
+        memory.updatedAt = Date.now();
+    }
+    return deletedCount;
 }
 
 function renderDeleteModeBar() {
     if (!$('#cpgl_delete_mode_bar').length) return;
-    $('#cpgl_header_delete_messages').toggleClass('active', !!state.deleteMode);
+    $('#cpgl_header_delete_messages')
+        .toggleClass('active', !!state.deleteMode)
+        .attr('aria-pressed', String(!!state.deleteMode));
     if (!state.deleteMode || !getCurrentGroup()) {
         $('#cpgl_delete_mode_bar').hide().empty();
         return;
@@ -4542,14 +5869,105 @@ function initializeFrontend(reason = 'unknown') {
     if (!state.frontendInitialized) {
         state.frontendInitialized = true;
         recordCpglDebug('frontend.initialized', { reason });
+        setTimeout(maybeStartFirstRunOnboarding, 700);
     }
 }
 
+function trapHelpModalFocus(event) {
+    const modal = document.getElementById('cpgl_help_modal');
+    if (!modal || !isElementVisible(modal)) return;
+    const focusable = [...modal.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter(isElementVisible);
+    if (!focusable.length) {
+        event.preventDefault();
+        return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !modal.contains(active))) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && (active === last || !modal.contains(active))) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+function handleGlobalKeydown(event) {
+    if (event.key === 'Tab' && $('#cpgl_help_modal').is(':visible')) {
+        trapHelpModalFocus(event);
+        return;
+    }
+    if (event.key !== 'Escape') return;
+    if (state.onboarding.active) {
+        event.preventDefault();
+        pauseOnboarding();
+        return;
+    }
+    if ($('#cpgl_help_modal').is(':visible')) {
+        event.preventDefault();
+        closeHelpModal();
+        return;
+    }
+    if ($('#cpgl_redpacket_modal').is(':visible')) {
+        event.preventDefault();
+        $('#cpgl_redpacket_modal').hide();
+        return;
+    }
+    if ($('#cpgl_create_modal').is(':visible')) {
+        event.preventDefault();
+        $('#cpgl_create_modal_close').trigger('click');
+        return;
+    }
+    if ($('#cpgl_manage_drawer').hasClass('is-open')) {
+        event.preventDefault();
+        $('#cpgl_manage_close').trigger('click');
+        return;
+    }
+    if ($('#cpgl_manager_modal').is(':visible')) {
+        event.preventDefault();
+        $('#cpgl_manager_close').trigger('click');
+    }
+}
+
+function guardOnboardingPointer(event) {
+    if (!state.onboarding.active) return;
+    const eventTarget = event.target;
+    if (eventTarget?.closest?.('#cpgl_tour_card')) return;
+
+    const step = getCurrentOnboardingStep();
+    const target = getOnboardingTarget(step);
+    const targetIsInteractive = !!step.waitFor || ['name', 'persona', 'members', 'composer', 'delete-messages', 'help'].includes(step.id);
+    const withinTarget = target && (eventTarget === target || target.contains?.(eventTarget));
+    const withinMemberPicker = step.id === 'members' && eventTarget?.closest?.('#cpgl_create_members');
+    if (targetIsInteractive && (withinTarget || withinMemberPicker)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+}
+
 function registerEvents() {
-    window.addEventListener('resize', refreshStatus);
-    window.addEventListener('orientationchange', () => setTimeout(refreshStatus, 250));
-    window.visualViewport?.addEventListener('resize', syncVisibleViewportModal);
-    window.visualViewport?.addEventListener('scroll', syncVisibleViewportModal);
+    const refreshLayout = () => {
+        refreshStatus();
+        scheduleOnboardingPosition();
+    };
+    const syncViewportLayout = () => {
+        syncVisibleViewportModal();
+        scheduleOnboardingPosition();
+    };
+    window.addEventListener('resize', refreshLayout);
+    window.addEventListener('orientationchange', () => setTimeout(refreshLayout, 250));
+    window.addEventListener('storage', syncLocalStateFromAnotherWindow);
+    window.visualViewport?.addEventListener('resize', syncViewportLayout);
+    window.visualViewport?.addEventListener('scroll', syncViewportLayout);
+    document.addEventListener('keydown', handleGlobalKeydown);
+    document.addEventListener('pointerdown', guardOnboardingPointer, true);
+    document.addEventListener('touchstart', guardOnboardingPointer, { capture: true, passive: false });
+    document.addEventListener('click', guardOnboardingPointer, true);
+    document.addEventListener('scroll', scheduleOnboardingPosition, true);
     eventSource.on(event_types.MESSAGE_SENT, onUserMessage);
     eventSource.on(event_types.MESSAGE_RECEIVED, onAssistantMessage);
     eventSource.on(event_types.CHAT_CHANGED, () => {

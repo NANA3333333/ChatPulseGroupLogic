@@ -20,6 +20,14 @@
 chatpulse_group_logic.local_groups.v1
 ```
 
+新手引导状态与未完成的建群草稿单独存储：
+
+```text
+chatpulse_group_logic.onboarding.v1
+```
+
+引导记录包含 `status`、`stepId`、`createdGroupId` 和 `draft`。它不保存聊天内容；重新开始引导也不会删除已有群聊。
+
 顶层结构：
 
 ```json
@@ -39,7 +47,6 @@ chatpulse_group_logic.local_groups.v1
   "userPersonaAvatar": "persona-avatar.png",
   "messages": [],
   "redPackets": [],
-  "debugLogs": [],
   "worldInfoBooks": [],
   "includeCharacterWorldInfo": true,
   "memory": {},
@@ -52,7 +59,9 @@ chatpulse_group_logic.local_groups.v1
 - `members` 使用 SillyTavern 角色卡 avatar 文件名绑定角色。
 - `userPersonaAvatar` 使用 SillyTavern 现有 user persona 头像文件名绑定本群用户人设。
 - 可以创建多个群聊；所有群都保存在 `groups` 数组里。
+- 不同 SillyTavern 角色卡可以同时出现在同一群的 `members` 中。
 - 世界书不是必填项。`worldInfoBooks` 是群聊额外世界书；`includeCharacterWorldInfo` 开启时还会读取成员角色卡绑定世界书。
+- 完整 Prompt、Raw Output、清理后输出和失败诊断只存放在页面内存中，不写入 localStorage，刷新后清除。
 
 ## 消息字段
 
@@ -96,16 +105,16 @@ chatpulse_group_logic.local_groups.v1
 群聊轮询使用 SillyTavern 前端的：
 
 ```js
-generateQuietPrompt(options)
+generateRaw(options)
 ```
 
 关键参数：
 
-- `quietPrompt`：扩展构造的群聊提示词
-- `forceChId`：当前发言角色的 SillyTavern 角色索引
+- `prompt`：只包含扩展显式构造的 `system` / `user` 消息
 - `responseLength`：群管理面板里的输出上限
-- `skipWIAN: true`：群聊生成时由扩展自行处理世界书注入
-- `removeReasoning: true`：移除推理块
+- `trimNames: false`：保留扩展自己的单角色输出清理流程
+
+角色卡描述、性格、场景、首条消息、示例对话、系统提示、历史后置提示和 depth prompt 都由扩展显式加入。这样不会夹带 SillyTavern 当前打开的私聊角色或原生聊天历史。
 
 如果当前 ST 没有连好模型/API，群聊发送也不会有角色回复；请先在 SillyTavern 原生连接设置里确认普通私聊能生成。
 
@@ -113,7 +122,7 @@ generateQuietPrompt(options)
 
 长期记忆总结有两种模式：
 
-- 当前模型：继续使用 SillyTavern 当前生成后端
+- 当前模型：使用同一个 `generateRaw` 隔离接口和 SillyTavern 当前生成后端
 - 自定义小模型：走 SillyTavern 的 Custom OpenAI-compatible 后端
 
 自定义模型列表读取：
@@ -133,6 +142,15 @@ POST /api/backends/chat-completions/status
 
 API Key 使用 SillyTavern 全局 Custom API Key，不在本扩展里单独保存。
 
+## 记忆权限与 User persona 边界
+
+- 私聊 → 群聊：只读取与当前群 `userPersonaAvatar` 相同的角色私聊。
+- 群聊 → 私聊：只有当前 SillyTavern 私聊使用同一 User persona 时才会注入。
+- 其他群 → 当前群：源群和目标群的 User persona 必须相同。
+- 任一端缺少明确的 persona avatar 时直接拒绝共享，不把两个空值视为同一身份。
+- 上述身份条件满足后，仍需对应的 `memoryPermissions` 开关允许。
+- 群聊 → 私聊会组合长期摘要与摘要游标之后的近期原文，避免只看到旧摘要。
+
 ## 调试插件接口
 
 可选服务端调试插件目录：
@@ -148,4 +166,3 @@ POST /api/plugins/chatpulse_group_logic_debug/log
 ```
 
 前端点击、视口、错误探针会把调试信息 POST 到该接口，方便在 Termux/TUI 后台确认点击是否进入前端逻辑。没有安装调试插件时，扩展仍可正常使用。
-
