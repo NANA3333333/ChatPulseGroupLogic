@@ -1,6 +1,8 @@
 # ChatPulse Group Logic 接口说明
 
-本扩展是 SillyTavern 前端第三方扩展，不提供独立聊天后端，也不要求手动连接 ChatPulse API。角色生成默认复用 SillyTavern 当前已连接的生成后端。
+本扩展是 SillyTavern 前端第三方扩展，不提供独立 ChatPulse 后端。角色生成默认复用 SillyTavern 当前已连接的生成后端；用户也可以为某个角色配置专属的 OpenAI-compatible 群聊 API。无论哪种模式，请求仍由 SillyTavern 后端代理。
+
+本仓库只负责微信式群聊、群成员主动消息和群嫉妒。角色私聊主动消息、私聊嫉妒和每角色私聊定时属于独立项目 [ST-AutoPulse](https://github.com/NANA3333333/ST-AutoPulse)；两个扩展不共享计时器、嫉妒设置或 API 配置。
 
 ## 前端入口
 
@@ -47,6 +49,23 @@ chatpulse_group_logic.onboarding.v1
   "userPersonaAvatar": "persona-avatar.png",
   "messages": [],
   "redPackets": [],
+  "memberAutomation": {
+    "character-avatar.png": {
+      "enabled": false,
+      "intervalMinMinutes": 10,
+      "intervalMaxMinutes": 60,
+      "prompt": "",
+      "jealousyEnabled": false,
+      "jealousyChance": 50,
+      "jealousyPrompt": "",
+      "nextTriggerAt": 0,
+      "lastTriggerAt": 0,
+      "claimOwnerId": "",
+      "claimEventId": "",
+      "claimUntil": 0,
+      "lastCompletedEventId": ""
+    }
+  },
   "worldInfoBooks": [],
   "includeCharacterWorldInfo": true,
   "memory": {},
@@ -61,6 +80,7 @@ chatpulse_group_logic.onboarding.v1
 - 可以创建多个群聊；所有群都保存在 `groups` 数组里。
 - 不同 SillyTavern 角色卡可以同时出现在同一群的 `members` 中。
 - 世界书不是必填项。`worldInfoBooks` 是群聊额外世界书；`includeCharacterWorldInfo` 开启时还会读取成员角色卡绑定世界书。
+- `memberAutomation` 按当前群和成员 avatar 隔离；同一角色在两个群中的开关、间隔、主动提示与群嫉妒互不覆盖。
 - 完整 Prompt、Raw Output、清理后输出和失败诊断只存放在页面内存中，不写入 localStorage，刷新后清除。
 
 ## 消息字段
@@ -102,7 +122,7 @@ chatpulse_group_logic.onboarding.v1
 
 ## 生成接口
 
-群聊轮询使用 SillyTavern 前端的：
+未给当前角色配置专属群聊 API 时，群聊轮询使用 SillyTavern 前端的：
 
 ```js
 generateRaw(options)
@@ -117,6 +137,56 @@ generateRaw(options)
 角色卡描述、性格、场景、首条消息、示例对话、系统提示、历史后置提示和 depth prompt 都由扩展显式加入。这样不会夹带 SillyTavern 当前打开的私聊角色或原生聊天历史。
 
 如果当前 ST 没有连好模型/API，群聊发送也不会有角色回复；请先在 SillyTavern 原生连接设置里确认普通私聊能生成。
+
+### 角色专属群聊 API
+
+角色级配置保存在 SillyTavern 扩展设置的：
+
+```text
+ChatPulseGroupLogic.characterGroupApis[characterAvatar]
+```
+
+只保存以下非明文字段：
+
+```json
+{
+  "mode": "custom",
+  "endpoint": "https://api.example.com/v1",
+  "model": "example-model",
+  "secretId": "SillyTavern-secret-id",
+  "temperature": 0.9,
+  "maxTokens": 3000
+}
+```
+
+明文 API Key 通过 SillyTavern `writeSecret(SECRET_KEYS.CUSTOM, ...)` 写入 Secrets。群聊生成时使用：
+
+```js
+ChatCompletionService.processRequest({
+  chat_completion_source: 'custom',
+  custom_url: endpoint,
+  model,
+  secret_id: secretId,
+  messages,
+  max_tokens: maxTokens
+}, {}, true)
+```
+
+规则：
+
+- 配置粒度是角色 avatar，跨本扩展所有群共用。
+- 没有角色配置或 `mode: "st_default"` 时不传 `custom_url`、`model` 或 `secret_id`，继续走 ST 当前 API 的 `generateRaw`。
+- 用户明确选择 `custom` 但缺少 Endpoint、Model 或 Key 时会报错，不会静默改走其他可能计费的连接。
+- Key 输入框是只写的；留空保存会保留旧 Key，只有点击“清除 Key”才删除对应 Secret。
+- 角色 API 与下方长期记忆总结 API 完全独立。
+
+## 群成员主动调度
+
+- 调度键为 `(groupId, memberAvatar)`。
+- 每次到期只生成目标成员的一条消息；群嫉妒提示会折叠进同一次请求。
+- 主动消息不调用普通 `runOrchestratedRound`，不收集 post-round `@`，不处理红包反应或自动领取，也不触发其他成员。
+- 同源多窗口优先使用 Web Locks；localStorage claim 作为兼容回退。提交前会再次校验 `ownerId` 与 `eventId`。
+- 页面长时间关闭后从当前时间重新排下一次，不回补所有错过的时间片。
 
 ## 总结模型接口
 
@@ -140,7 +210,7 @@ POST /api/backends/chat-completions/status
 }
 ```
 
-API Key 使用 SillyTavern 全局 Custom API Key，不在本扩展里单独保存。
+这里的“总结小模型”继续使用 SillyTavern 全局 Custom API Key；它不会读取角色专属群聊 API 的 `secretId`。角色 API 与总结 API 是两套独立路由。
 
 ## 记忆权限与 User persona 边界
 

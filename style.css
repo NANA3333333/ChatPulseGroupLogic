@@ -5236,3 +5236,109 @@
         border-radius: 10px;
     }
 }
+
+/* Member automation and per-role API cards follow the compact WeChat
+   "chat info" hierarchy while keeping every advanced control discoverable. */
+.cpgl-member-settings-card {
+    margin: 0 0 8px;
+    border-color: #e6e6e8;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: none;
+}
+
+.cpgl-member-settings-card > summary {
+    min-height: 54px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    color: #191919;
+    list-style-position: inside;
+}
+
+.cpgl-member-settings-card > summary small {
+    color: #8a8a8f;
+    font-size: 11px;
+    font-weight: 500;
+    text-align: right;
+}
+
+.cpgl-member-settings-card[open] > summary {
+    border-bottom: 1px solid #ededee;
+    background: #fafafa;
+}
+
+.cpgl-member-settings-card .cpgl-summary-custom {
+    margin: 10px;
+    border-color: #e6e6e8;
+    background: #ffffff;
+}
+
+.cpgl-member-automation-panel {
+    border-left: 3px solid #07c160 !important;
+}
+
+.cpgl-role-api-panel {
+    border-left: 3px solid #5b8def !important;
+}
+
+.cpgl-member-settings-card .cpgl-summary-custom select {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--cpgl-border);
+    border-radius: 6px;
+    padding: 8px 9px;
+    background: #ffffff;
+    color: var(--cpgl-text-primary);
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.cpgl-member-settings-card input[type="checkbox"] {
+    width: auto;
+    min-width: 16px;
+    accent-color: #07c160;
+}
+
+.cpgl-two-column-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.cpgl-member-auto-status,
+.cpgl-role-api-status {
+    overflow-wrap: anywhere;
+    color: #737378;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+@media (max-width: 620px), (pointer: coarse) and (max-width: 900px) {
+    .cpgl-member-settings-card > summary {
+        min-height: 62px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .cpgl-member-settings-card > summary small {
+        padding-left: 46px;
+        text-align: left;
+    }
+
+    .cpgl-two-column-fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .cpgl-member-settings-card .cpgl-row {
+        align-items: stretch;
+    }
+
+    .cpgl-member-settings-card .cpgl-row .menu_button,
+    .cpgl-member-settings-card .cpgl-row .cpgl-danger-link {
+        min-height: 44px;
+    }
+}

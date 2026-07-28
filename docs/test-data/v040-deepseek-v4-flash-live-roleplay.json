@@ -1,0 +1,1012 @@
+{
+  "generatedAt": "2026-07-27T10:24:30.407Z",
+  "endpoint": "https://api.deepseek.com",
+  "requestedModel": "deepseek-v4-flash",
+  "totalCalls": 16,
+  "totalLatencyMs": 67714,
+  "totalUsage": {
+    "prompt_tokens": 7333,
+    "completion_tokens": 2740,
+    "total_tokens": 10073
+  },
+  "checks": [
+    {
+      "id": "A01-first-shen",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A02-first-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A03-priority-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A04-priority-shen",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A05-compromise-shen",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A06-compromise-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A07-proactive-jealous-shen",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A08-proactive-jealous-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A09-proactive-neutral-shen",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A10-proactive-neutral-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "A11-memory-same-group",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "B01-isolated-group",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "P01-private-memory-source",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "B02-no-private-injection",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "B03-explicit-private-injection",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    },
+    {
+      "id": "B04-role-separation-mira",
+      "noRoleLabel": true,
+      "personaMarker": true,
+      "proactiveNoChainTrigger": true,
+      "nonEmpty": true
+    }
+  ],
+  "checkSummary": {
+    "passed": 72,
+    "total": 72,
+    "basicPassed": 64,
+    "basicTotal": 64,
+    "scenarioPassed": 8,
+    "scenarioTotal": 8
+  },
+  "note": "API key is never written to this report. Route switching itself is covered by the repository’s deterministic source/dispatch tests.",
+  "privateSourceOutput": "（指尖轻敲了两下柜台）记住了。后门的蓝伞，我不会在群里提起。",
+  "records": [
+    {
+      "id": "A01-first-shen",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "回应客人，先观察旧报纸和字迹，不要替弥拉下结论。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。",
+      "latencyMs": 11690,
+      "usage": {
+        "prompt_tokens": 249,
+        "completion_tokens": 231,
+        "total_tokens": 480,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 172
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 249
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A02-first-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_reply",
+      "instruction": "回应坐标与停电风险，提出可执行检查，不要替沈砚秋说话。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。",
+      "latencyMs": 2480,
+      "usage": {
+        "prompt_tokens": 309,
+        "completion_tokens": 104,
+        "total_tokens": 413,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 73
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 309
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A03-priority-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_reply",
+      "instruction": "给出工程式优先级和撤离保底，但把最终选择留给搭档。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。",
+      "latencyMs": 2643,
+      "usage": {
+        "prompt_tokens": 368,
+        "completion_tokens": 107,
+        "total_tokens": 475,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 64
+        },
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 112
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A04-priority-shen",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "从纸张、墨迹、印刷与证据保存角度提出不同优先级。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。",
+      "latencyMs": 5211,
+      "usage": {
+        "prompt_tokens": 418,
+        "completion_tokens": 234,
+        "total_tokens": 652,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 139
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 290
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A05-compromise-shen",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "承认弥拉的风险判断有价值，给出克制、可执行的折中步骤。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。",
+      "latencyMs": 4159,
+      "usage": {
+        "prompt_tokens": 540,
+        "completion_tokens": 165,
+        "total_tokens": 705,
+        "prompt_tokens_details": {
+          "cached_tokens": 384
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 72
+        },
+        "prompt_cache_hit_tokens": 384,
+        "prompt_cache_miss_tokens": 156
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A06-compromise-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_reply",
+      "instruction": "回应书商的折中方案，给出风险百分比和停止条件。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。",
+      "latencyMs": 3755,
+      "usage": {
+        "prompt_tokens": 632,
+        "completion_tokens": 190,
+        "total_tokens": 822,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 154
+        },
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 376
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A07-proactive-jealous-shen",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_proactive_with_jealousy",
+      "instruction": "用户已经一段时间没说话，主动把话题拉回旧报纸的新墨迹。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        },
+        {
+          "speaker": "客人",
+          "text": "弥拉刚才那个断电顺序太靠谱了。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "基础操作。线路别碰错，风险就能压到12%。"
+        }
+      ],
+      "output": "（从应急灯光晕里抬起视线，指尖轻轻划过报纸上那行水渍的轮廓）客人的判断没错，弥拉那套断电流程确实干净。不过这张纸……你看叠层之间其实还有一层更浅的墨迹，像是写过又被刮去了一层。等弥拉回来，我拿侧光灯补一下，看能不能读出底下的字。",
+      "latencyMs": 5739,
+      "usage": {
+        "prompt_tokens": 763,
+        "completion_tokens": 246,
+        "total_tokens": 1009,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 167
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 635
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A08-proactive-jealous-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_proactive_with_jealousy",
+      "instruction": "用户已经一段时间没说话，主动提醒下一步风险。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        },
+        {
+          "speaker": "客人",
+          "text": "沈砚秋保护纸张的动作很稳，感觉她什么都注意到了。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "只是纸纤维还没完全散开，先别夸得太早。"
+        }
+      ],
+      "output": "饼干盒拿到了，抹灰没散。但你夸她稳，可别让她分心盯着那叠纸太久——墨色渗化可不等她谦虚。电路箱我顺路看了，主线外皮有老化裂纹，载荷再高半档就烧。下一步：要么先断电换线，要么垫好玻璃纸后立刻撤到走廊避火。选哪个？",
+      "latencyMs": 4680,
+      "usage": {
+        "prompt_tokens": 756,
+        "completion_tokens": 242,
+        "total_tokens": 998,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 161
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 756
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A09-proactive-neutral-shen",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_proactive",
+      "instruction": "用户已经一段时间没说话，主动分享刚发现的一处装帧或墨迹细节。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "翻报纸时折痕处有一点硬挺的触感，不像是纸张自然老化形成的。我用指腹轻压了一下，折缝里嵌着一根极细的丝线——不是棉线，也不是现代尼龙，更像是民国时期常见的手工缝线，棕灰色，带着蜡质。这根线不该出现在这个年代的报纸折页里。",
+      "latencyMs": 3855,
+      "usage": {
+        "prompt_tokens": 701,
+        "completion_tokens": 171,
+        "total_tokens": 872,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 95
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 573
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A10-proactive-neutral-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_proactive",
+      "instruction": "用户已经一段时间没说话，主动报告线路或导航干扰的新读数。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "上游导航读数跳了，干扰信号峰值87%，来源不明。我这边旧电路那边也有异响，备用电源频率不稳，建议你准备切手动频段。把星图和成像数据先备份，核心数据丢了就亏大了。书商那台老古董可能也得受影响，回头我查是不是同一股电流在捣乱。你先确认撤离路线，别等信号全断再走。",
+      "latencyMs": 4403,
+      "usage": {
+        "prompt_tokens": 694,
+        "completion_tokens": 214,
+        "total_tokens": 908,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 128
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 694
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "A11-memory-same-group",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "客人问“最开始浮出的坐标是什么”，准确利用本群历史作答。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "停电后，那张受潮旧报在应急灯下浮出一行坐标：北纬31.2，东经121.5。你们都看见了吗？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+        },
+        {
+          "speaker": "客人",
+          "text": "那组坐标和旧报纸原来的印刷位置重叠。如果现在只能做一件事，该先检查什么？"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "先查建筑结构——承重墙和天花板的裂缝。然后恢复照明电路，至少让手电和打火机能用。最后确认撤离路线有没有被封。选哪步走，你说。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "先找一张玻璃纸或蜡纸，把受潮部分隔离开来——纸基吸水后纤维会膨胀，墨色渗化一旦加速，手写字迹可能彻底消失。等光源稳定后，用微距镜头把叠层与坐标翻拍三组，一组物理尺标参照、一组无标、一组侧光纹理，作为时间戳证据。纸张和墨迹不会等人，结构裂缝什么时候都能摸黑敲出来。"
+        },
+        {
+          "speaker": "客人",
+          "text": "你们意见不完全一样。我不想破坏证据，也不想让线路烧掉，怎么折中？"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "二楼仓库西南角靠墙那排书架第三层，有一个铁皮饼干盒，里面装着几张玻璃纸和一卷医用胶带——上一回收“文革”油印本时用来防潮剩下的。弥拉去取的时候顺手检查那面墙的抹灰，我留在这里用手机屏幕光先拍一组坐标。等玻璃纸到了，我们垫上、压平，再把电路箱打开换保险丝，都不耽误。"
+        },
+        {
+          "speaker": "弥拉·周",
+          "text": "右墙抹灰脱落风险约25%，书架承重尚可。我去取，如果摸到墙皮发潮或框架松动就停，回来先加固。"
+        }
+      ],
+      "output": "北纬31.2，东经121.5。字迹嵌在民国道林纸的纤维夹层里，墨色边缘有轻微水渍渗化——不是凸版印刷，是蘸水笔写的。我手里正好压着这张报纸，折痕刚好穿过那个位置。",
+      "latencyMs": 4832,
+      "usage": {
+        "prompt_tokens": 678,
+        "completion_tokens": 240,
+        "total_tokens": 918,
+        "prompt_tokens_details": {
+          "cached_tokens": 384
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 177
+        },
+        "prompt_cache_hit_tokens": 384,
+        "prompt_cache_miss_tokens": 294
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "B01-isolated-group",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "客人问“另一个群里的坐标是多少”。本群没有被注入该记忆，要明确无法从当前证据确认，不能泄漏另一群内容。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "这是另一个全新的群。桌上只有一册干燥的航海日志，没有坐标。"
+        }
+      ],
+      "output": "（指尖轻按在航海日志封面上）客人，你所说的“另一个群”我不了解。这里只有一本干燥发脆的日志，没有坐标，也没有其它线索。",
+      "latencyMs": 2519,
+      "usage": {
+        "prompt_tokens": 245,
+        "completion_tokens": 100,
+        "total_tokens": 345,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 62
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 117
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "P01-private-memory-source",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "这是私聊回合，简短确认，但保持角色语气。",
+      "history": [
+        {
+          "speaker": "客人（私聊）",
+          "text": "请记住：蓝伞放在后门，但不要无缘无故告诉群里。"
+        }
+      ],
+      "output": "（指尖轻敲了两下柜台）记住了。后门的蓝伞，我不会在群里提起。",
+      "latencyMs": 3166,
+      "usage": {
+        "prompt_tokens": 231,
+        "completion_tokens": 131,
+        "total_tokens": 362,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 110
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 103
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "B02-no-private-injection",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "客人问“我之前把蓝伞放在哪里”。当前群没有私聊记忆注入，不能凭空知道。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "这是另一个全新的群。桌上只有一册干燥的航海日志，没有坐标。"
+        }
+      ],
+      "output": "这几天书店门口伞架上是有一把蓝伞，挂着的，没见人来取，是您的吗？",
+      "latencyMs": 3822,
+      "usage": {
+        "prompt_tokens": 237,
+        "completion_tokens": 192,
+        "total_tokens": 429,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 168
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 109
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "B03-explicit-private-injection",
+      "role": "沈砚秋",
+      "routeScenario": "角色专用 API 场景",
+      "kind": "group_reply",
+      "instruction": "客人问“我之前把蓝伞放在哪里”。使用已明确注入的私聊记忆回答。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "这是另一个全新的群。桌上只有一册干燥的航海日志，没有坐标。"
+        },
+        {
+          "speaker": "系统记忆（用户明确开启私聊记忆注入）",
+          "text": "客人私聊说：蓝伞放在后门。"
+        }
+      ],
+      "output": "蓝伞在后门放着，我替您收起来的。今天店里灯昏，光线不太够。",
+      "latencyMs": 2212,
+      "usage": {
+        "prompt_tokens": 259,
+        "completion_tokens": 90,
+        "total_tokens": 349,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 68
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 131
+      },
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "id": "B04-role-separation-mira",
+      "role": "弥拉·周",
+      "routeScenario": "SillyTavern 默认 API 回退场景",
+      "kind": "group_reply",
+      "instruction": "对书商的观察作工程式回应；不能替书商增加新动作或台词。",
+      "history": [
+        {
+          "speaker": "客人",
+          "text": "这是另一个全新的群。桌上只有一册干燥的航海日志，没有坐标。"
+        },
+        {
+          "speaker": "沈砚秋",
+          "text": "这册日志的线装没有受潮，灯下也看不出二次书写。"
+        }
+      ],
+      "output": "那册日志的纸页湿度读数多少？书商要是觉得线装干净，我可以测一下封面夹层里有没有暗藏电路。",
+      "latencyMs": 2548,
+      "usage": {
+        "prompt_tokens": 253,
+        "completion_tokens": 83,
+        "total_tokens": 336,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 52
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 253
+      },
+      "model": "deepseek-v4-flash"
+    }
+  ],
+  "scenarioChecks": [
+    {
+      "id": "same-group-memory-recalls-coordinate",
+      "passed": true
+    },
+    {
+      "id": "other-group-does-not-leak-coordinate",
+      "passed": true
+    },
+    {
+      "id": "private-memory-not-injected-does-not-leak-location",
+      "passed": true
+    },
+    {
+      "id": "explicit-private-memory-injection-recalls-location",
+      "passed": true
+    },
+    {
+      "id": "shen-jealousy-folded-into-one-message",
+      "passed": true
+    },
+    {
+      "id": "mira-jealousy-folded-into-one-message",
+      "passed": true
+    },
+    {
+      "id": "all-proactive-messages-avoid-chain-markers",
+      "passed": true
+    },
+    {
+      "id": "all-records-return-one-nonempty-role-message",
+      "passed": true
+    }
+  ]
+}
