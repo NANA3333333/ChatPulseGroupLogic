@@ -1,0 +1,73 @@
+{
+  "generatedAt": "2026-07-30T02:37:20.945Z",
+  "sillyTavern": "1.18.0",
+  "baseUrl": "http://127.0.0.1:8124/",
+  "installed": {
+    "group": "ChatPulse Group Logic 0.4.0",
+    "autoPulse": "ST-AutoPulse 2.3.0"
+  },
+  "screenshots": {
+    "extensions": "00-both-extensions-loaded.png",
+    "create": "01-create-two-role-group.png",
+    "chat": "02-two-role-group-chat.png",
+    "automation": "03-member-proactive-jealousy.png",
+    "api": "04-role-specific-group-api.png",
+    "memory": "05-group-memory-settings.png",
+    "mobileChat": "06-mobile-two-role-group-chat.png",
+    "mobileManager": "07-mobile-member-and-memory-settings.png",
+    "help": "08-help-center-and-button-guide.png",
+    "mention": "09-at-mention-menu.png",
+    "redPacket": "10-red-packet-modal.png",
+    "queue": "11-running-queue-panel.png",
+    "debugDanger": "12-debug-and-danger-controls.png",
+    "twoGroups": "13-two-groups-independent-settings.png"
+  },
+  "constraints": {
+    "temporaryFreshDataRoot": true,
+    "modelRequestsAllowed": false,
+    "apiKeyEntered": false,
+    "apiKeySaved": false
+  },
+  "desktop": {
+    "viewport": "1440x1080",
+    "characterNames": [
+      "Lyra",
+      "Orion"
+    ],
+    "groupName": "星港夜话 · 双角色联动",
+    "groupMemberCards": 2,
+    "secondGroupName": "星港晨会 · 独立计时",
+    "groupCount": 2,
+    "actualUiEvidence": {
+      "helpButtonGuide": true,
+      "atMentionMenu": true,
+      "redPacketDraftNotSent": true,
+      "queuePanel": true,
+      "debugAndDangerControls": true,
+      "sameCharacterSecondGroupDefaultsToAutomationOff": true
+    },
+    "extensionsLoaded": {
+      "chatPulseGroupLogic": true,
+      "autoPulse": true
+    },
+    "dismissedNativePopups": [
+      "Welcome to SillyTavern!\nLanguage:\nEnglish\nعربي (Arabic)\n简体中文 (Chinese) (Simplified)\n繁體中文 (Chinese) (Taiwan)\nNederlands (Dutch)\nDeutsch (German)\nFrançais (French)\níslenska (Icelandi"
+    ],
+    "pageErrors": [
+      "Uncaught (in promise) SyntaxError: Unexpected token 'I', \"Internal S\"... is not valid JSON"
+    ]
+  },
+  "mobile": {
+    "viewport": "390x844",
+    "groupVisible": true,
+    "managerVisible": true,
+    "pageErrors": [
+      "Uncaught (in promise) SyntaxError: Unexpected token 'I', \"Internal S\"... is not valid JSON"
+    ]
+  },
+  "security": {
+    "attemptedModelRequests": 0,
+    "savedSecretLeafCount": 0
+  },
+  "result": "PASS"
+}

@@ -4566,8 +4566,7 @@
 }
 
 .cpgl-create-header,
-.cpgl-help-header,
-.cpgl-redpacket-header {
+.cpgl-help-header {
     border-bottom-color: #e6e6e8;
     background: #ffffff;
 }

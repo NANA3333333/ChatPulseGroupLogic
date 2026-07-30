@@ -8,46 +8,79 @@
 
 ## 实机截图与测试数据
 
-以下截图和 AIRP 数据来自 2026-07-26 的 `0.3.0` 实机测试：当时在 SillyTavern 1.18.0 中实际加载扩展完成，不是静态 UI 稿。它们用于证明原有微信式界面、建群引导和记忆链路；不作为 `0.4.0` 新增的群主动消息、群嫉妒或角色专属群聊 API 的实机测试证据。
+### 0.4.0 当前源码：SillyTavern 实机功能图册
 
-### 电脑端
+2026-07-30 把本仓库当前 `0.4.0` 与 `ST-AutoPulse 2.3.0` 同时安装到 SillyTavern `1.18.0`，用全新临时用户数据实际点击完成建群、电脑端/手机端群聊、成员主动消息、群嫉妒、角色群聊 API、长期记忆、帮助、`@`、红包、队列、调试和第二个群。下面不是设计稿或单独打开的 HTML。
 
-Windows 微信式三栏布局：功能栏、群列表、聊天区与底部输入框。
+这一轮功能图册刻意阻止模型请求，也没有输入或保存 API Key；它证明当前源码的页面、状态隔离和操作入口。真实模型对话与人设数据放在下一节，无法只靠静态图片证明的路由、无接龙和多窗口行为则由脱敏报告与自动化用例证明。
 
-![电脑端 AIRP 群聊实机截图](docs/screenshots/wechat-desktop-airp.jpg)
-
-### 手机端
-
-手机端使用微信式全屏群聊，左上角返回群列表，右上角 `···` 打开聊天信息。
-
-<table>
-  <tr>
-    <th>实际群聊</th>
-    <th>聊天信息与快捷操作</th>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/wechat-mobile-airp.jpg" alt="手机端 AIRP 群聊实机截图" width="390"></td>
-    <td><img src="docs/screenshots/wechat-mobile-chat-info.jpg" alt="手机端聊天信息页面" width="390"></td>
-  </tr>
-</table>
-
-### 游戏式新手引导
-
-首次进入会用遮罩、高亮和箭头带用户真实点击控件，并完成第一个群聊的创建。
-
-| 指向新建群聊按钮 | 指向群名称输入框 |
+| 两个扩展同时安装 | 创建双角色群 |
 |---|---|
-| ![箭头指向新建群聊按钮](docs/screenshots/onboarding-create.jpg) | ![箭头指向群名称输入框](docs/screenshots/onboarding-name.jpg) |
+| ![SillyTavern 扩展设置同时显示 ST-AutoPulse 和 ChatPulse Group Logic](docs/screenshots/v040-ui-00-both-extensions-loaded.png) | ![在当前源码中填写群名、选择 User 人设和两名成员](docs/screenshots/v040-ui-01-create-two-role-group.png) |
 
-### AIRP 记忆连续性
+| 电脑端微信式三栏页面 | 本群 × 此角色的主动消息与 100% 群嫉妒 |
+|---|---|
+| ![当前 0.4.0 电脑端微信式群聊页面](docs/screenshots/v040-ui-02-two-role-group-chat.png) | ![成员设置中独立间隔、提示词、群嫉妒概率和立即测试按钮](docs/screenshots/v040-ui-03-member-proactive-jealousy.png) |
 
-实际测试覆盖群聊 → 私聊、不同 User persona 隔离，以及同一 User persona 授权后的跨群记忆。
+成员主动设置属于“本群 × 此角色”；角色群聊 API 属于“该角色在本扩展所有群共用”；总结模型又是第三套独立设置。
 
-![AIRP 跨窗口记忆测试数据](docs/screenshots/airp-continuity.png)
+| 角色专属群聊 API（Key 未输入） | 长期摘要、总结模型与三项记忆权限 |
+|---|---|
+| ![角色群聊 API 的默认与专用模式、Endpoint、Model、温度和输出上限](docs/screenshots/v040-ui-04-role-specific-group-api.png) | ![长期记忆 R 窗口、S 阈值、总结模型与私聊群聊记忆权限](docs/screenshots/v040-ui-05-group-memory-settings.png) |
 
-### 0.4.0 DeepSeek V4 Flash 真实对话数据
+手机端不是把电脑窗口缩小，而是全屏聊天与“聊天信息”页面：
 
-当前版本另外使用用户授权的 DeepSeek 官方 API，按 AIRP 用户方式跑了 16 次 `deepseek-v4-flash` 角色扮演请求：
+| 手机端群聊 `390×844` | 手机端成员主动设置 |
+|---|---|
+| ![手机端微信式全屏群聊、返回、群名和更多按钮](docs/screenshots/v040-ui-06-mobile-two-role-group-chat.png) | ![手机端聊天信息、帮助入口和成员主动设置](docs/screenshots/v040-ui-07-mobile-member-and-memory-settings.png) |
+
+帮助中心会直接解释第一次建群、按钮图鉴、回复规则、成员主动消息和角色 API；右下角可以重新启动箭头引导。
+
+![0.4.0 当前帮助中心和按钮图鉴](docs/screenshots/v040-ui-08-help-center-and-button-guide.png)
+
+| `@` 全体/角色选择 | 红包发送窗口 |
+|---|---|
+| ![输入 @ 后出现全体成员和两名角色](docs/screenshots/v040-ui-09-at-mention-menu.png) | ![拼手气和普通红包窗口，包含人数、金额和留言](docs/screenshots/v040-ui-10-red-packet-modal.png) |
+
+实机截图时发现红包标题被后置 CSS 覆盖成白底白字；当前源码已修复为上图的红底白字，并加入视觉回归测试。
+
+| 运行队列、最近输入/输出与红包记录 | 调试清理、按条删除和危险操作 |
+|---|---|
+| ![群管理中的运行队列、调试记录和红包记录](docs/screenshots/v040-ui-11-running-queue-panel.png) | ![清空队列、删除对话记录和删除当前群聊](docs/screenshots/v040-ui-12-debug-and-danger-controls.png) |
+
+同一角色进入第二个群时，第二群默认仍是“主动：未开启”，不会继承第一个群的开关和间隔；左侧两个群都会保留。
+
+![第二个群保留独立成员和自动化状态](docs/screenshots/v040-ui-13-two-groups-independent-settings.png)
+
+- [0.4.0 当前实机 UI 机器记录](docs/test-data/v040-sillytavern-ui-capture.json)：14 张截图、桌面/手机视口、两个扩展同装、零模型请求与零 Secret。
+- 当前确定性检查为 **20 / 20**：在原有 19 项之外增加了红包标题可见性的回归契约。
+
+### 0.4.0 当前界面：角色 API、双角色对话与群主动联动
+
+下面一组继续使用本仓库当前 `0.4.0` 源码，在 SillyTavern `1.18.0` 中实际点击设置和发送按钮。由于本轮测试环境连接 DeepSeek 时长时间无返回，浏览器请求由本地 OpenAI-compatible 测试端点接住，并回放下一节已经保存的真实 DeepSeek 输出。机器报告明确记录 `fixtureReplay: true`、`providerCallThisRun: false`；因此这些图片证明的是**当前界面的路由参数、消息落盘和无接龙行为**，不是一次新的外部模型调用。
+
+| 沈砚秋：使用角色专属群聊 API | 弥拉·周：跟随 SillyTavern 当前 API |
+|---|---|
+| ![沈砚秋选择角色专属群聊 API，显示 Endpoint、Model 与空白 Key 输入框](docs/screenshots/v040-replay-01-role-api-custom-route.png) | ![弥拉周的角色群聊 API 保持跟随 SillyTavern 当前连接](docs/screenshots/v040-replay-01b-role-api-follows-st.png) |
+
+截图中的 Key 输入框为空，仓库和报告都没有保存明文 Key。脱敏请求记录显示：沈砚秋请求携带 `custom_url + secret_id`，弥拉·周请求不携带这两个专属字段。
+
+![当前 0.4.0 界面中的用户消息与两名角色实际群聊回放](docs/screenshots/v040-replay-02-two-role-group-round.png)
+
+普通群聊从 0 条变为 3 条：1 条用户消息、1 条沈砚秋回复和 1 条弥拉·周回复。两段回复分别保留旧书店主的纸张/墨迹细节和机械师的电路/风险口吻。
+
+| 本群主动消息与 100% 群嫉妒设置 | 两次明确测试后的群消息 |
+|---|---|
+| ![为群成员设置主动消息、独立间隔与百分百群嫉妒](docs/screenshots/v040-replay-03-member-automation-jealousy-settings.png) | ![先测试弥拉普通主动消息，再测试沈砚秋群嫉妒主动消息](docs/screenshots/v040-replay-04-proactive-jealousy-no-chain.png) |
+
+右图包含两次用户明确点击的“立即测试一条”：先生成弥拉·周的普通主动消息，再生成沈砚秋的“主动消息 + 100% 群嫉妒”消息，并不是一次触发后角色自动互相接龙。对沈砚秋这次联动，消息数为 `4 → 5 → 5`：立即只增加 1 条，等待 5.5 秒后仍为 5 条。群嫉妒只改变同一条主动消息的提示与语气，没有额外弹窗、第二条嫉妒消息、`@` 或红包连锁。
+
+- [当前 UI 路由与无接龙脱敏报告](docs/test-data/v040-current-ui-fixture-replay-e2e.json)：5 / 5 个当前界面请求成功，专属/默认路由字段符合预期，结果为 `PASS_PARTIAL`。
+- `PASS_PARTIAL` 表示这里只重跑了角色路由、双角色普通轮询和主动消息联动；总结模型与跨私聊/跨群记忆没有在这一轮浏览器回放里重新调用，相关模型结果仍以 16 次真实 DeepSeek 数据和确定性用例为准。
+
+### 0.4.0 DeepSeek V4 Flash 真实 AIRP 数据
+
+当前版本使用用户授权的 DeepSeek 官方 API，按 AIRP 用户方式跑了 16 次 `deepseek-v4-flash` 角色扮演请求：
 
 - 两名角色连续接话、意见冲突与协商；
 - 两名角色各自的群主动消息；
@@ -64,7 +97,26 @@ Windows 微信式三栏布局：功能栏、群列表、聊天区与底部输入
 - [完整测试摘要](docs/test-data/v040-deepseek-v4-flash-live-roleplay.md)
 - [16 次请求、输出、延迟、Token 与断言 JSON](docs/test-data/v040-deepseek-v4-flash-live-roleplay.json)
 
-`0.4.0` 新增逻辑的自动化检查为 `19 / 19`；真实模型组合检查为 `72 / 72`；`0.3.0` 的历史发布基线为 `109 / 109`。测试范围和截图边界见 [测试报告](TEST_REPORT.md)。
+当前截图环境无法再次连出到模型服务时，只会把这批已保存且脱敏的真实输出回放到当前 UI，并在报告中标明 `providerCallThisRun: false`；不会把回放冒充成新 API 调用。`0.4.0` 自动化检查为 `20 / 20`，真实模型组合检查为 `72 / 72`；测试范围和截图边界见 [测试报告](TEST_REPORT.md)。
+
+<details>
+<summary>展开 0.3.0 历史实机基线</summary>
+
+以下截图和 AIRP 数据来自 2026-07-26 的 `0.3.0` 实机测试，用于保留原有微信式界面、建群引导和记忆链路的历史证据，不证明 `0.4.0` 新功能。
+
+| 历史电脑端 | 历史手机端 |
+|---|---|
+| ![0.3.0 电脑端 AIRP 群聊](docs/screenshots/wechat-desktop-airp.jpg) | ![0.3.0 手机端 AIRP 群聊](docs/screenshots/wechat-mobile-airp.jpg) |
+
+| 历史手机聊天信息 | 历史 AIRP 连续性 |
+|---|---|
+| ![0.3.0 手机聊天信息](docs/screenshots/wechat-mobile-chat-info.jpg) | ![0.3.0 AIRP 跨窗口记忆测试数据](docs/screenshots/airp-continuity.png) |
+
+| 历史引导：新建群聊 | 历史引导：群名输入 |
+|---|---|
+| ![0.3.0 箭头指向新建群聊](docs/screenshots/onboarding-create.jpg) | ![0.3.0 箭头指向群名称输入](docs/screenshots/onboarding-name.jpg) |
+
+</details>
 
 ## 功能
 
@@ -212,7 +264,7 @@ cp -r ~/SillyTavern/public/scripts/extensions/third-party/ChatPulseGroupLogic/se
 npm run check
 ```
 
-当前 `0.4.0` 自动化检查包含 19 个用例，覆盖群 × 角色定时隔离、群嫉妒单提示与禁止接龙、跨窗口 claim 状态转换、角色群聊 API 默认/自定义路由及生产入口接线。真实模型质量另有 16 次 DeepSeek V4 Flash 请求和 72 项组合断言；浏览器端截图仍按上文明确区分版本与验证范围。
+当前 `0.4.0` 自动化检查包含 20 个用例，覆盖群 × 角色定时隔离、群嫉妒单提示与禁止接龙、跨窗口 claim 状态转换、角色群聊 API 默认/自定义路由、生产入口接线及红包标题视觉回归。真实模型质量另有 16 次 DeepSeek V4 Flash 请求和 72 项组合断言；当前浏览器实机图、真实模型数据和历史截图仍按上文明确区分验证范围。
 
 ## 许可证
 

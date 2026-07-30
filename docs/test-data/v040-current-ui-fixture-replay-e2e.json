@@ -1,0 +1,290 @@
+{
+  "generatedAt": "2026-07-30T02:58:42.174Z",
+  "result": "PASS_PARTIAL",
+  "scope": "current UI core replay: role routing, dual-role group round, proactive+jealousy single-message/no-chain",
+  "actualApi": false,
+  "providerCallThisRun": false,
+  "fixtureReplay": true,
+  "runtime": {
+    "sillyTavern": "1.18.0",
+    "extension": "ChatPulse Group Logic 0.4.0",
+    "model": "deepseek-v4-flash",
+    "endpointHost": "127.0.0.1 (local replay fixture)",
+    "temporaryDataRootRemovedAfterRun": true
+  },
+  "historicalActualProviderData": {
+    "sourceFile": "docs/test-data/v040-deepseek-v4-flash-live-roleplay.json",
+    "generatedAt": "2026-07-27T10:24:30.407Z",
+    "providerEndpoint": "https://api.deepseek.com",
+    "requestedModel": "deepseek-v4-flash",
+    "totalCalls": 16,
+    "totalUsage": {
+      "prompt_tokens": 7333,
+      "completion_tokens": 2740,
+      "total_tokens": 10073
+    },
+    "sourceCheckSummary": {
+      "passed": 72,
+      "total": 72,
+      "basicPassed": 64,
+      "basicTotal": 64,
+      "scenarioPassed": 8,
+      "scenarioTotal": 8
+    },
+    "note": "Current UI requests were replayed through a local OpenAI-compatible fixture using these previously captured real DeepSeek outputs. No provider call succeeded in this run."
+  },
+  "scenario": {
+    "userPersona": "Nana",
+    "group": "雾港修复组 · 0.4.0 实机验收",
+    "roles": [
+      "沈砚秋",
+      "弥拉·周"
+    ],
+    "groupRound": {
+      "before": 0,
+      "after": 3
+    },
+    "proactiveJealousyNoChain": {
+      "before": 4,
+      "afterImmediate": 5,
+      "afterSettled": 5,
+      "exactOneMessage": true,
+      "stableAfter5500ms": true
+    },
+    "actualSummaryPreview": "",
+    "crossChatMemoryBridgeThisRun": "not-run"
+  },
+  "assertions": {
+    "roleACustomApi": true,
+    "roleBFollowsSillyTavern": true,
+    "customSummaryModelIndependentFromRoleSecret": null,
+    "proactiveJealousyMergedIntoOneMessage": true,
+    "proactiveDidNotStartChain": true,
+    "groupMemoryVisibleInPrivatePrompt": null,
+    "privateMemoryVisibleInGroupPrompt": null,
+    "apiKeyAbsentFromReport": true
+  },
+  "screenshots": {
+    "roleApi": "01-role-api-custom-route.png",
+    "roleApiDefault": "01b-role-api-follows-st.png",
+    "groupRound": "02-actual-two-role-group-round.png",
+    "automation": "03-member-automation-jealousy-settings.png",
+    "proactive": "04-actual-proactive-jealousy-no-chain.png"
+  },
+  "apiSummary": {
+    "count": 5,
+    "successful": 5,
+    "failed": 0,
+    "byKind": {
+      "role-api-test": 1,
+      "group-round": 2,
+      "group-proactive": 2
+    },
+    "routes": {
+      "customRoleWithSecretId": 2,
+      "stDefaultRoleWithoutCustomFields": 2,
+      "summaryCustomWithoutRoleSecretId": 0
+    },
+    "bridgeRequests": {
+      "privateReadsGroup": 0,
+      "groupReadsPrivate": 0
+    },
+    "totalUsage": {
+      "promptTokens": 2015,
+      "completionTokens": 795,
+      "totalTokens": 2810
+    }
+  },
+  "requests": [
+    {
+      "id": 1,
+      "startedAt": "2026-07-30T02:58:19.292Z",
+      "endpoint": "/api/backends/chat-completions/generate",
+      "source": "custom",
+      "model": "deepseek-v4-flash",
+      "route": "custom",
+      "customUrlHost": "api.deepseek.com",
+      "hasCustomUrl": true,
+      "hasSecretId": true,
+      "maxTokens": 80,
+      "kind": "role-api-test",
+      "role": "",
+      "includesJealousy": false,
+      "includesGroupMemoryBridge": false,
+      "includesPrivateMemoryBridge": false,
+      "includesNoChainInstruction": false,
+      "promptSha256": "2192e8911a281a2bac6162ed1851d2c904e4b0027b8e59de5237f563ef6a9b01",
+      "status": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "totalTokens": 0
+      },
+      "outputPreview": "连接正常"
+    },
+    {
+      "id": 2,
+      "startedAt": "2026-07-30T02:58:22.365Z",
+      "endpoint": "/api/backends/chat-completions/generate",
+      "source": "custom",
+      "model": "deepseek-v4-flash",
+      "route": "custom",
+      "customUrlHost": "api.deepseek.com",
+      "hasCustomUrl": true,
+      "hasSecretId": true,
+      "maxTokens": 800,
+      "kind": "group-round",
+      "role": "沈砚秋",
+      "includesJealousy": true,
+      "includesGroupMemoryBridge": false,
+      "includesPrivateMemoryBridge": false,
+      "includesNoChainInstruction": false,
+      "promptSha256": "9626d342de5505d9ae3a56d085d65ad15cd577391875197c52b8d784dad7014a",
+      "status": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 249,
+        "completionTokens": 231,
+        "totalTokens": 480
+      },
+      "outputPreview": "指尖抚过报头边缘，纸张触感泛涩，像是民国年间的道林纸。字迹确实藏在叠层间，墨色边缘有轻微渗化——不是印刷，是手写。我开灯靠近了些，灯影下那些笔画依然清晰。"
+    },
+    {
+      "id": 3,
+      "startedAt": "2026-07-30T02:58:25.779Z",
+      "endpoint": "/api/backends/chat-completions/generate",
+      "source": "deepseek",
+      "model": "deepseek-v4-flash",
+      "route": "st-default",
+      "customUrlHost": "",
+      "hasCustomUrl": false,
+      "hasSecretId": false,
+      "maxTokens": 3000,
+      "kind": "group-round",
+      "role": "弥拉·周",
+      "includesJealousy": false,
+      "includesGroupMemoryBridge": false,
+      "includesPrivateMemoryBridge": false,
+      "includesNoChainInstruction": false,
+      "promptSha256": "5a7f7112756564701fb221cdf80864288b984280ba94e65b25f2e1cd1c59594e",
+      "status": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 309,
+        "completionTokens": 104,
+        "totalTokens": 413
+      },
+      "outputPreview": "灯光不稳，电路负荷超标。坐标我标记了，但先检查备用电源保险丝——书商那台古董灯还能撑半小时。"
+    },
+    {
+      "id": 4,
+      "startedAt": "2026-07-30T02:58:30.256Z",
+      "endpoint": "/api/backends/chat-completions/generate",
+      "source": "deepseek",
+      "model": "deepseek-v4-flash",
+      "route": "st-default",
+      "customUrlHost": "",
+      "hasCustomUrl": false,
+      "hasSecretId": false,
+      "maxTokens": 3000,
+      "kind": "group-proactive",
+      "role": "弥拉·周",
+      "includesJealousy": false,
+      "includesGroupMemoryBridge": false,
+      "includesPrivateMemoryBridge": false,
+      "includesNoChainInstruction": false,
+      "promptSha256": "585ff434982a141e054c2de093cd6f41f7ed33ddcff2e3e29ea49bf8a47fd8c7",
+      "status": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 694,
+        "completionTokens": 214,
+        "totalTokens": 908
+      },
+      "outputPreview": "上游导航读数跳了，干扰信号峰值87%，来源不明。我这边旧电路那边也有异响，备用电源频率不稳，建议你准备切手动频段。把星图和成像数据先备份，核心数据丢了就亏大了。书商那台老古董可能也得受影响，回头我查是不是同一股电流在捣乱。你先确认撤离路线，别等信号全断再走。"
+    },
+    {
+      "id": 5,
+      "startedAt": "2026-07-30T02:58:35.448Z",
+      "endpoint": "/api/backends/chat-completions/generate",
+      "source": "custom",
+      "model": "deepseek-v4-flash",
+      "route": "custom",
+      "customUrlHost": "api.deepseek.com",
+      "hasCustomUrl": true,
+      "hasSecretId": true,
+      "maxTokens": 800,
+      "kind": "group-proactive",
+      "role": "沈砚秋",
+      "includesJealousy": true,
+      "includesGroupMemoryBridge": false,
+      "includesPrivateMemoryBridge": false,
+      "includesNoChainInstruction": false,
+      "promptSha256": "329d31ebcf8fb3aa50490b117e31b050ae6d34f6fa41a66c53fb827102c39826",
+      "status": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 763,
+        "completionTokens": 246,
+        "totalTokens": 1009
+      },
+      "outputPreview": "（从应急灯光晕里抬起视线，指尖轻轻划过报纸上那行水渍的轮廓）客人的判断没错，弥拉那套断电流程确实干净。不过这张纸……你看叠层之间其实还有一层更浅的墨迹，像是写过又被刮去了一层。等弥拉回来，我拿侧光灯补一下，看能不能读出底下的字。"
+    }
+  ],
+  "fixtureCalls": [
+    {
+      "index": 1,
+      "transport": "playwright-route-fulfill",
+      "historicalRecordId": "fixture-connection-check",
+      "sourceGeneratedAt": "2026-07-27T10:24:30.407Z",
+      "sourceProvider": "https://api.deepseek.com",
+      "sourceModel": "deepseek-v4-flash",
+      "promptSha256": "c9498b0c178021b53b6ec827c46b7a5f4347ae6f3e35a83209e9d60fa59b87e3"
+    },
+    {
+      "index": 2,
+      "transport": "playwright-route-fulfill",
+      "historicalRecordId": "A01-first-shen",
+      "sourceGeneratedAt": "2026-07-27T10:24:30.407Z",
+      "sourceProvider": "https://api.deepseek.com",
+      "sourceModel": "deepseek-v4-flash",
+      "promptSha256": "51f3ced58bd25b92ffe9557d2bd4c170bcd927222b85be2bff3dbb52fdb9bf13"
+    },
+    {
+      "index": 3,
+      "transport": "playwright-route-fulfill",
+      "historicalRecordId": "A02-first-mira",
+      "sourceGeneratedAt": "2026-07-27T10:24:30.407Z",
+      "sourceProvider": "https://api.deepseek.com",
+      "sourceModel": "deepseek-v4-flash",
+      "promptSha256": "29100d6da85d77ca872cabdb1e86d2769565b4b4a532a668a941d4ddf6818a86"
+    },
+    {
+      "index": 4,
+      "transport": "playwright-route-fulfill",
+      "historicalRecordId": "A10-proactive-neutral-mira",
+      "sourceGeneratedAt": "2026-07-27T10:24:30.407Z",
+      "sourceProvider": "https://api.deepseek.com",
+      "sourceModel": "deepseek-v4-flash",
+      "promptSha256": "0b1b197e193c233c552a0da5d0d8e7689ccbd65431e76fe3fa3a647ff41e0f9e"
+    },
+    {
+      "index": 5,
+      "transport": "playwright-route-fulfill",
+      "historicalRecordId": "A07-proactive-jealous-shen",
+      "sourceGeneratedAt": "2026-07-27T10:24:30.407Z",
+      "sourceProvider": "https://api.deepseek.com",
+      "sourceModel": "deepseek-v4-flash",
+      "promptSha256": "bad34e8dec084460ea8b81df1e531406492a87ebdb222a4fc227a5505c842519"
+    }
+  ],
+  "pageErrors": [],
+  "security": {
+    "providerApiKeyUsedThisRun": false,
+    "fixturePlaceholderCredentialOnly": true,
+    "rawApiKeyWrittenToHarness": false,
+    "secretIdsRedacted": true,
+    "passwordFieldClearedAfterRoleApiTest": true
+  }
+}
